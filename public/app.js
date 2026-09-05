@@ -26,6 +26,7 @@ const MODE = {
 }
 
 let D = null
+let STALE = false
 let ME = ''
 try { ME = localStorage.getItem('zt.me') || '' } catch {}
 let NOTIF = false
@@ -40,6 +41,7 @@ async function tick () {
     const r = await fetch('/api/tombolas', { headers: { accept: 'application/json' } })
     if (!r.ok) throw new Error(r.status)
     D = await r.json()
+    STALE = r.headers.get('x-stale') === '1'
     render()
     checkNew()
   } catch {
@@ -104,7 +106,8 @@ function render () {
   renderVerdict()
 
   const age = S.scanAt ? D.now - S.scanAt : null
-  $('#foot').innerHTML = `Scanner actif : ${S.scanUsed} requêtes toutes les ${S.tickSeconds} s`
+  $('#foot').innerHTML = (STALE ? '<b style="color:var(--gold)">Données en différé — le collecteur est momentanément indisponible, ces chiffres datent de quelques minutes.</b><br>' : '')
+    + `Scanner actif : ${S.scanUsed} requêtes toutes les ${S.tickSeconds} s`
     + (age != null ? ` · dernier passage il y a ${age} s` : '')
     + ` · ${num(S.known)} tombolas connues`
     + (S.hidden ? ` · ${S.hidden} test${S.hidden > 1 ? 's' : ''} écarté${S.hidden > 1 ? 's' : ''}` : '')

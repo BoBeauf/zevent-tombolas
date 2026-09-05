@@ -465,20 +465,41 @@ export default {
          le Durable Object. Avec, l'objet n'est sollicité qu'une fois toutes les 4 s
          quel que soit le nombre de visiteurs. */
       const key = new Request(new URL('/api/tombolas', u.origin), { method: 'GET' })
+      // Copie de secours, gardée 1 h : elle sert si le Durable Object refuse de répondre
+      // (quota de lignes lues atteint, incident). Le site affiche alors des données un
+      // peu datées plutôt que « service indisponible ».
+      const backupKey = new Request(new URL('/api/tombolas-secours', u.origin), { method: 'GET' })
       const cache = caches.default
       const hit = await cache.match(key)
       if (hit) return hit
-      ctx.waitUntil(stub(env).fetch('https://do/hit?k=api'))
-      const r = await stub(env).fetch('https://do/payload')
-      const res = new Response(r.body, {
-        headers: {
-          'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'public, max-age=5, s-maxage=10',
-          'access-control-allow-origin': '*',
-        },
-      })
-      ctx.waitUntil(cache.put(key, res.clone()))
-      return res
+      try {
+        ctx.waitUntil(stub(env).fetch('https://do/hit?k=api'))
+        const r = await stub(env).fetch('https://do/payload')
+        if (!r.ok) throw new Error('DO ' + r.status)
+        const body = await r.text()
+        const mk = (ttl, extra = {}) => new Response(body, {
+          headers: {
+            'content-type': 'application/json; charset=utf-8',
+            'cache-control': `public, max-age=5, s-maxage=${ttl}`,
+            'access-control-allow-origin': '*', ...extra,
+          },
+        })
+        const res = mk(10)
+        ctx.waitUntil(cache.put(key, res.clone()))
+        ctx.waitUntil(cache.put(backupKey, mk(3600)))
+        return res
+      } catch (e) {
+        const old = await cache.match(backupKey)
+        if (old) {
+          const h = new Headers(old.headers)
+          h.set('x-stale', '1')
+          h.set('cache-control', 'public, max-age=15')
+          return new Response(old.body, { headers: h })
+        }
+        return new Response(JSON.stringify({ error: 'indisponible', at: Date.now() }), {
+          status: 503, headers: { 'content-type': 'application/json', 'access-control-allow-origin': '*' },
+        })
+      }
     }
     // Sans correspondance dans public/, on renvoie la page : le front est une seule page.
     return env.ASSETS ? env.ASSETS.fetch(req) : new Response('not found', { status: 404 })
