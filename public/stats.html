@@ -76,6 +76,10 @@ const NUM = new Intl.NumberFormat('fr-FR')
 const num = n => NUM.format(Math.round(n || 0))
 // no-store : sinon un rechargement de page peut servir jusqu'à 30 s de chiffres périmés
 fetch('/api/stats', { cache: 'no-store' }).then(r => r.json()).then(S => {
+  if (S.unavailable) {
+    $('#today').innerHTML = '<div style="color:var(--gold);font-size:15px;line-height:1.6">Statistiques momentanément indisponibles.<br><span style="color:var(--dim);font-size:13px">Le quota journalier gratuit de Cloudflare est atteint ; il se réinitialise à 00:00 UTC (2 h du matin). Le site lui-même continue de fonctionner.</span></div>'
+    return
+  }
   const t = S.days.find(d => d.day === S.today) || { views: 0, visitors: 0, api: 0 }
   $('#today').innerHTML = [
     ['Visites', t.views], ['Visiteurs distincts', t.visitors], ['Appels d\'API servis', t.api],

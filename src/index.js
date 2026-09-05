@@ -94,8 +94,16 @@ export class Scanner extends DurableObject {
   }
 
   // Réarme l'alarme si elle a disparu (premier démarrage, redéploiement, incident).
+  /* Poser une alarme est une ÉCRITURE. Quand le quota d'écritures du plan gratuit est
+     atteint, elle échoue — et comme arm() est appelée au début de chaque requête, c'est
+     tout l'objet qui devient injoignable, y compris pour de la simple lecture. On isole
+     donc l'échec : la lecture continue de fonctionner même si la replanification échoue. */
   async arm () {
-    if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + 1000)
+    try {
+      if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + 1000)
+    } catch (e) {
+      this.armError = String(e.message || e)
+    }
   }
 
   async fetch (req) {
@@ -471,10 +479,18 @@ export default {
       return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } })
     }
     if (u.pathname === '/api/stats') {
-      const r = await stub(env).fetch('https://do/stats')
-      return new Response(r.body, {
-        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=30' },
-      })
+      try {
+        const r = await stub(env).fetch('https://do/stats')
+        if (!r.ok) throw new Error('DO ' + r.status)
+        return new Response(r.body, {
+          headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=30' },
+        })
+      } catch (e) {
+        // quota atteint ou incident : on le dit clairement au lieu de renvoyer une 500
+        return new Response(JSON.stringify({ unavailable: true, reason: String(e.message || e) }), {
+          status: 200, headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'no-store' },
+        })
+      }
     }
     if (u.pathname === '/api/tombolas') {
       /* Cache d'arête explicite. Une réponse de Worker n'est pas mise en cache
@@ -503,7 +519,7 @@ export default {
         })
         const res = mk(10)
         ctx.waitUntil(cache.put(key, res.clone()))
-        ctx.waitUntil(cache.put(backupKey, mk(3600)))
+        ctx.waitUntil(cache.put(backupKey, mk(43200)))   // 12 h : couvre une coupure jusqu'au reset
         return res
       } catch (e) {
         const old = await cache.match(backupKey)
