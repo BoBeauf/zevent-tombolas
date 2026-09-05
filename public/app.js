@@ -150,6 +150,8 @@ function card (x) {
       <a class="btn-tw${x.live ? '' : ' off'}" href="https://twitch.tv/${esc(x.login)}" target="_blank" rel="noopener">${TWITCH}${x.live ? 'Regarder' : 'La chaîne'}</a>
       ${x.drawn ? '' : `<a class="btn-don" href="https://zevent.fr/don/${esc(x.login)}" target="_blank" rel="noopener">${HEART}Participer</a>`}
     </div>` : ''}`
+  const tw = c.querySelector('.btn-tw'); if (tw) tw.addEventListener('click', () => track('twitch'))
+  const dn = c.querySelector('.btn-don'); if (dn) dn.addEventListener('click', () => track('don'))
   return c
 }
 
@@ -219,8 +221,9 @@ function paintBell () {
 $('#bell').onclick = async () => {
   NOTIF = !NOTIF
   try { localStorage.setItem('zt.notif', NOTIF ? '1' : '0') } catch {}
+  track(NOTIF ? 'notif_on' : 'notif_off')
   if (NOTIF && window.Notification && Notification.permission === 'default') {
-    try { await Notification.requestPermission() } catch {}
+    try { if (await Notification.requestPermission() === 'granted') track('notif_granted') } catch {}
   }
   paintBell()
   if (NOTIF) toast('<div class="t1">🔔 Alertes activées</div><div class="t2">Tu seras prévenu dès qu\'une tombola démarre.</div>', 6000)
@@ -230,8 +233,10 @@ const deb = (fn, ms) => { let t; return (...a) => { clearTimeout(t); t = setTime
 const inp = $('#me')
 inp.value = ME
 $('#meclear').hidden = !ME
+let pseudoTracked = false
 inp.oninput = deb(e => {
   ME = e.target.value.trim()
+  if (ME.length >= 3 && !pseudoTracked) { pseudoTracked = true; track('pseudo') }
   try { localStorage.setItem('zt.me', ME) } catch {}
   $('#meclear').hidden = !ME
   renderVerdict(); renderPast()
@@ -261,17 +266,24 @@ function schedule () {
   clearInterval(timer)
   timer = setInterval(tick, want)
 }
-/* Balise de fréquentation : un appel au chargement, jamais pendant les sondages.
-   L'identifiant est tiré au sort dans le navigateur — aucune IP, aucun cookie, aucun
-   tiers : il sert seulement à ne pas compter dix fois la même personne dans la journée. */
-;(function beacon () {
-  let vid = ''
-  try {
-    vid = localStorage.getItem('zt.vid') || ''
-    if (!vid) { vid = Math.random().toString(36).slice(2, 12); localStorage.setItem('zt.vid', vid) }
-  } catch {}
-  fetch('/api/hit?v=' + encodeURIComponent(vid), { method: 'GET', keepalive: true }).catch(() => {})
-})()
+/* Mesure d'usage. L'identifiant est tiré au sort dans le navigateur — aucune IP, aucun
+   cookie, aucun tiers : il sert seulement à ne pas compter dix fois la même personne
+   dans la journée. Seuls des compteurs agrégés sont conservés côté serveur. */
+let VID = ''
+try {
+  VID = localStorage.getItem('zt.vid') || ''
+  if (!VID) { VID = Math.random().toString(36).slice(2, 12); localStorage.setItem('zt.vid', VID) }
+} catch {}
+function track (kind) {
+  const u = `/api/hit?k=${kind}&v=${encodeURIComponent(VID)}`
+  // sendBeacon survit à la navigation : un clic sur « Participer » quitte la page,
+  // et un fetch classique serait annulé avant d'être parti.
+  try { if (navigator.sendBeacon && navigator.sendBeacon(u)) return } catch {}
+  fetch(u, { keepalive: true }).catch(() => {})
+}
+track('view')
+
+const td = $('#topdon'); if (td) td.addEventListener('click', () => track('don'))
 
 paintBell()
 tick().then(schedule)

@@ -18,6 +18,11 @@ const UA = 'zevent-tombolas/1.0 (usage personnel, lecture seule)'
 const TICK_MS = 10_000
 const BUDGET = 25
 
+/* Types d'événements acceptés par /api/hit. Liste blanche stricte : l'endpoint est
+   public, sans elle n'importe qui pourrait créer des compteurs arbitraires. */
+const EVENTS = ['notif_on', 'notif_off', 'notif_granted', 'don', 'twitch', 'pseudo', 'share']
+const KINDS = new Set(['view', ...EVENTS])
+
 const now = () => Math.floor(Date.now() / 1000)
 const str = v => (v == null ? null : typeof v === 'string' ? v : String(v))
 // ATTENTION : contrairement à toutes les autres API du ZEvent, celle-ci renvoie des
@@ -52,6 +57,8 @@ export class Scanner extends DurableObject {
          il permet de distinguer deux visites du même visiteur, rien d'autre. */
       CREATE TABLE IF NOT EXISTS hits(day TEXT, kind TEXT, n INTEGER, PRIMARY KEY(day, kind));
       CREATE TABLE IF NOT EXISTS visitors(day TEXT, vid TEXT, PRIMARY KEY(day, vid));
+      -- personnes distinctes par type d'événement (alerte activée, clic don, clic Twitch…)
+      CREATE TABLE IF NOT EXISTS ev(day TEXT, kind TEXT, vid TEXT, PRIMARY KEY(day, kind, vid));
     `)
     ctx.blockConcurrencyWhile(async () => { await this.arm() })
   }
@@ -82,11 +89,14 @@ export class Scanner extends DurableObject {
   hit (vid, kind) {
     const day = new Date().toISOString().slice(0, 10)
     this.sql.exec('INSERT INTO hits(day,kind,n) VALUES(?,?,1) ON CONFLICT(day,kind) DO UPDATE SET n=n+1', day, kind)
-    if (vid) this.sql.exec('INSERT OR IGNORE INTO visitors(day,vid) VALUES(?,?)', day, String(vid).slice(0, 24))
+    const v = vid ? String(vid).slice(0, 24) : null
+    if (v && kind === 'view') this.sql.exec('INSERT OR IGNORE INTO visitors(day,vid) VALUES(?,?)', day, v)
+    else if (v) this.sql.exec('INSERT OR IGNORE INTO ev(day,kind,vid) VALUES(?,?,?)', day, kind, v)
     // 30 jours d'historique suffisent, et le stockage reste minuscule
     const cut = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
     this.sql.exec('DELETE FROM hits WHERE day < ?', cut)
     this.sql.exec('DELETE FROM visitors WHERE day < ?', cut)
+    this.sql.exec('DELETE FROM ev WHERE day < ?', cut)
   }
 
   stats () {
@@ -98,8 +108,18 @@ export class Scanner extends DurableObject {
        FROM hits h GROUP BY h.day ORDER BY h.day DESC LIMIT 14`).toArray()
     const today = new Date().toISOString().slice(0, 10)
     const t = days.find(d => d.day === today) || { views: 0, visitors: 0, api: 0 }
+    // Usage : clics cumulés et personnes distinctes, aujourd'hui et depuis le début
+    const ev = {}
+    for (const k of EVENTS) {
+      const all = this.sql.exec('SELECT COALESCE(SUM(n),0) n FROM hits WHERE kind=?', k).toArray()[0]?.n ?? 0
+      const day = this.sql.exec('SELECT COALESCE(SUM(n),0) n FROM hits WHERE kind=? AND day=?', k, today).toArray()[0]?.n ?? 0
+      const pAll = this.sql.exec('SELECT COUNT(DISTINCT vid) n FROM ev WHERE kind=?', k).toArray()[0]?.n ?? 0
+      const pDay = this.sql.exec('SELECT COUNT(DISTINCT vid) n FROM ev WHERE kind=? AND day=?', k, today).toArray()[0]?.n ?? 0
+      ev[k] = { clicks: all, clicksToday: day, people: pAll, peopleToday: pDay }
+    }
+    const totalVisitors = this.sql.exec('SELECT COUNT(DISTINCT vid) n FROM visitors').toArray()[0]?.n ?? 0
     return {
-      today, days: days.reverse(),
+      today, days: days.reverse(), events: ev, totalVisitors,
       // Le quota qui compte : 100 000 invocations de Worker par jour sur le plan gratuit.
       quota: { limit: 100_000, usedToday: t.views + t.api, note: 'estimation locale ; le chiffre autoritaire est dans le tableau de bord Cloudflare' },
       scan: { wakeupsPerDay: Math.round(86400 / (TICK_MS / 1000)), subrequestsPerDay: Math.round(86400 / (TICK_MS / 1000)) * BUDGET },
@@ -371,7 +391,9 @@ export default {
     // Balise de fréquentation : un appel par chargement de page, pas par sondage.
     if (u.pathname === '/api/hit') {
       const vid = u.searchParams.get('v') || ''
-      ctx.waitUntil(stub(env).fetch('https://do/hit?k=view&v=' + encodeURIComponent(vid)))
+      const kind = u.searchParams.get('k') || 'view'
+      if (!KINDS.has(kind)) return new Response(null, { status: 204 })
+      ctx.waitUntil(stub(env).fetch(`https://do/hit?k=${kind}&v=${encodeURIComponent(vid)}`))
       return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } })
     }
     if (u.pathname === '/api/stats') {

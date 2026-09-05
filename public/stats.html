@@ -24,6 +24,14 @@
   .kfig > div{min-width:120px}
   .kfig .k{font-size:11px;color:var(--dim2);text-transform:uppercase;letter-spacing:.08em}
   .kfig .v{font-size:28px;font-weight:850;letter-spacing:-.03em;margin-top:2px;font-variant-numeric:tabular-nums}
+  .usage{display:grid;grid-template-columns:repeat(auto-fit,minmax(190px,1fr));gap:12px}
+  .u{background:var(--card2);border:1px solid var(--line);border-radius:12px;padding:13px 15px}
+  .u .k{font-size:11.5px;color:var(--dim2);text-transform:uppercase;letter-spacing:.07em;font-weight:700;min-height:2.4em}
+  .u .v{font-size:26px;font-weight:850;letter-spacing:-.02em;margin-top:3px;font-variant-numeric:tabular-nums}
+  .u .s{font-size:11.5px;color:var(--dim);margin-top:4px;line-height:1.4}
+  .u .s b{color:var(--txt)}
+  .u.hl{border-color:rgba(255,201,77,.4);background:linear-gradient(150deg,rgba(255,201,77,.09),var(--card2))}
+  .u.hl .v{color:var(--gold)}
 </style>
 </head>
 <body>
@@ -42,6 +50,10 @@
     <div class="tiny" id="quota" style="color:var(--dim)"></div>
   </div>
   <div class="card">
+    <h2>Usage <span style="text-transform:none;letter-spacing:0;font-weight:500;color:#5d6480">— clics cumulés, et personnes distinctes</span></h2>
+    <div class="usage" id="usage"></div>
+  </div>
+  <div class="card">
     <h2>14 derniers jours</h2>
     <div class="bars" id="days"></div>
   </div>
@@ -50,7 +62,8 @@
     <div class="tiny" id="scan" style="color:var(--dim);line-height:1.7"></div>
   </div>
   <p class="fine" style="color:var(--dim2);font-size:12px;line-height:1.7">
-    Le comptage se fait dans le Durable Object, sans cookie, sans IP et sans service tiers :
+    Visiteurs distincts depuis le début : <b id="tv"></b>.
+    <br>Le comptage se fait dans le Durable Object, sans cookie, sans IP et sans service tiers :
     chaque navigateur tire un identifiant aléatoire stocké chez lui, qui sert uniquement à ne
     pas compter dix fois la même personne dans la journée. L'historique est purgé au bout de 30 jours.
     <br>Le chiffre <b>autoritaire</b> pour le quota reste celui du tableau de bord Cloudflare
@@ -61,7 +74,8 @@
 const $ = s => document.querySelector(s)
 const NUM = new Intl.NumberFormat('fr-FR')
 const num = n => NUM.format(Math.round(n || 0))
-fetch('/api/stats').then(r => r.json()).then(S => {
+// no-store : sinon un rechargement de page peut servir jusqu'à 30 s de chiffres périmés
+fetch('/api/stats', { cache: 'no-store' }).then(r => r.json()).then(S => {
   const t = S.days.find(d => d.day === S.today) || { views: 0, visitors: 0, api: 0 }
   $('#today').innerHTML = [
     ['Visites', t.views], ['Visiteurs distincts', t.visitors], ['Appels d\'API servis', t.api],
@@ -73,6 +87,28 @@ fetch('/api/stats').then(r => r.json()).then(S => {
     — soit ${pct.toFixed(pct < 1 ? 2 : 1)} % du plan gratuit.
     ${pct < 50 ? 'Large.' : pct < 80 ? 'Ça commence à monter.' : 'Proche du plafond : passe la cadence au repos à 30 s dans public/app.js.'}
     <br><span style="color:var(--dim2)">${S.quota.note}</span>`
+
+  // Usage : chaque événement en clics et en personnes, avec le taux sur les visiteurs
+  const E = S.events || {}
+  const LBL = {
+    don: ['Clics « Participer »', 'vers la page de don du streamer', true],
+    twitch: ['Clics « Regarder »', 'ouverture de la chaîne Twitch', true],
+    notif_on: ['Alertes activées', 'bouton 🔔 mis en marche', false],
+    notif_granted: ['Notifications autorisées', 'permission accordée au navigateur', false],
+    pseudo: ['Pseudos renseignés', 'recherche « ai-je gagné ? »', false],
+    notif_off: ['Alertes désactivées', 'bouton 🔔 remis à l\'arrêt', false],
+  }
+  const tv = S.totalVisitors || 0
+  $('#usage').innerHTML = Object.entries(LBL).map(([k, [titre, sous, hl]]) => {
+    const e = E[k] || { clicks: 0, people: 0, clicksToday: 0, peopleToday: 0 }
+    const taux = tv ? (100 * e.people / tv) : 0
+    return `<div class="u${hl && e.clicks ? ' hl' : ''}">
+      <div class="k">${titre}</div>
+      <div class="v">${num(e.clicks)}</div>
+      <div class="s">par <b>${num(e.people)}</b> personne${e.people > 1 ? 's' : ''}${tv ? ` · ${taux.toFixed(taux < 10 ? 1 : 0)} % des visiteurs` : ''}
+        <br>aujourd'hui : ${num(e.clicksToday)} clic${e.clicksToday > 1 ? 's' : ''}, ${num(e.peopleToday)} personne${e.peopleToday > 1 ? 's' : ''}</div>
+    </div>`
+  }).join('')
 
   const max = Math.max(1, ...S.days.map(d => d.views))
   $('#days').innerHTML = S.days.length
@@ -86,6 +122,7 @@ fetch('/api/stats').then(r => r.json()).then(S => {
     (une alarme toutes les 10 s) et émet <b>${num(S.scan.subrequestsPerDay)}</b> requêtes vers les API du ZEvent.
     Ces requêtes sortantes ne comptent pas dans le quota des 100 000 : seul le trafic entrant compte.
     <br>Comptage démarré le ${S.since || '—'}.`
+  const tvEl = $('#tv'); if (tvEl) tvEl.textContent = num(tv)
 }).catch(() => { $('#today').textContent = 'Stats indisponibles.' })
 </script>
 </body>

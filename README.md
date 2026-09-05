@@ -155,6 +155,12 @@ poste le lien avec un paramètre (`?v=2`) pour forcer un nouveau rendu.
   identifiant aléatoire stocké chez lui, qui sert uniquement à ne pas compter dix fois la
   même personne dans la journée. Purge automatique au bout de 30 jours.
 - **`GET /api/stats`** — les mêmes chiffres en JSON.
+- **Usage** : clics sur « Participer » et « Regarder », alertes activées, notifications
+  autorisées, pseudos renseignés. Chaque événement est compté **en clics et en personnes
+  distinctes**, avec le taux sur l'ensemble des visiteurs. Les types acceptés sont sur
+  liste blanche côté Worker : `/api/hit` est public, sans elle n'importe qui pourrait
+  créer des compteurs arbitraires. Les clics sur les liens sortants partent en
+  `navigator.sendBeacon`, qui survit à la navigation là où un `fetch` serait annulé.
 - **Tableau de bord Cloudflare** (Workers & Pages → `zevent-tombolas` → Metrics) — le
   chiffre **autoritaire** pour le quota : requêtes, taux d'erreur, temps CPU. C'est là
   qu'il faut regarder pour savoir si on approche des 100 000 requêtes par jour.
