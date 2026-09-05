@@ -25,7 +25,7 @@ const BUDGET = 25
 
 /* Types d'événements acceptés par /api/hit. Liste blanche stricte : l'endpoint est
    public, sans elle n'importe qui pourrait créer des compteurs arbitraires. */
-const EVENTS = ['notif_on', 'notif_off', 'notif_granted', 'don', 'twitch', 'pseudo', 'share']
+const EVENTS = ['notif_on', 'notif_off', 'notif_granted', 'don', 'twitch', 'pseudo', 'share', 'verbi']
 // 'ping' est traité à part : présence en mémoire, jamais écrit en base
 const KINDS = new Set(['view', 'ping', ...EVENTS])
 const ONLINE_MS = 90_000   // au-delà, un onglet est considéré parti
