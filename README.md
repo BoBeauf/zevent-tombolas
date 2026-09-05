@@ -100,6 +100,24 @@ montant qui rejoint sa cagnotte entière. Les vraies sont des one-shots de 5 à 
 Elles sont donc masquées au-delà de 6 h de fin annoncée. Les tombolas d'essai (zéro euro
 **et** zéro participation) le sont aussi.
 
+## Amorçage : ce qu'un scanner démarré en retard ne peut pas voir
+
+`/tombola/latest/{twitchId}` ne renvoie que la **dernière** tombola d'un streamer. Un
+scanner lancé en cours d'event ne peut donc jamais retrouver les précédentes : mesuré,
+**22 des 46 streamers** ayant lancé une tombola en avaient lancé plusieurs, et le scanner
+n'en voyait que 38 sur 112.
+
+`/tombola/{id}` fonctionne en revanche pour n'importe quel identifiant connu. `src/seed.json`
+contient donc la liste des identifiants observés en direct par le collecteur
+[zevent-live](https://github.com/BoBeauf/zevent-live). Au premier réveil, s'il s'agit bien
+de la même édition, le scanner insère ces identifiants comme lignes vides ; la file A les
+remplit ensuite en interrogeant l'API officielle. **Aucune donnée n'est recopiée dans le
+dépôt, uniquement des identifiants** — les montants, gagnants et intitulés viennent tous
+de la source.
+
+Un identifiant qui renvoie `404` (tombola supprimée du module par son auteur) est retiré,
+pour ne pas occuper une place dans la file indéfiniment.
+
 ## Couverture
 
 Seules les tombolas créées dans le **module officiel** (`app.zevent.fr`) sont visibles.

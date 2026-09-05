@@ -2,6 +2,7 @@
    Aucune écriture vers l'extérieur : uniquement des GET sur des endpoints publics. */
 
 import { DurableObject } from 'cloudflare:workers'
+import SEED from './seed.json'
 
 const EMS = 'https://api.evenmorestats.fr'
 const ZAPI = 'https://api.zevent.fr'          // backend du module officiel (app.zevent.fr)
@@ -113,6 +114,7 @@ export class Scanner extends DurableObject {
       signal: AbortSignal.timeout(timeoutMs),
     })
     if (r.status === 429) { const e = new Error('429'); e.rateLimited = true; throw e }
+    if (r.status === 404) { const e = new Error('404'); e.notFound = true; throw e }
     if (!r.ok) throw new Error('HTTP ' + r.status)
     return r.json()
   }
@@ -212,19 +214,53 @@ export class Scanner extends DurableObject {
     const t = now()
     // A : les tombolas ouvertes, y compris celles dont l'heure de fin vient de passer
     // (le tirage arrive quelques instants après) — mais pas les reliquats jamais clôturés.
+    /* On relit le streamer depuis la table `streamers` plutôt que depuis la ligne de
+       tombola : une tombola relue par identifiant n'a pas forcément son attribution
+       (c'est le cas des lignes amorcées ci-dessous, et de celles vues avant que la
+       liste des participants soit chargée). ORDER BY ... DESC place les end_ts NULL
+       en dernier, donc les tombolas réellement en cours restent prioritaires. */
     push(this.sql.exec(
-      `SELECT id AS byId, twitch_id, streamer AS name, login, avatar FROM tombolas
-       WHERE drawn=0 AND (end_ts IS NULL OR end_ts < ?) ORDER BY end_ts DESC LIMIT 12`,
+      `SELECT t.id AS byId, t.twitch_id, s.name, s.login, s.avatar
+       FROM tombolas t LEFT JOIN streamers s ON s.twitch_id = t.twitch_id
+       WHERE t.drawn=0 AND (t.end_ts IS NULL OR t.end_ts < ?)
+       ORDER BY t.end_ts DESC LIMIT 12`,
       t + 6 * 3600).toArray())
     push(this.sql.exec(
       `SELECT twitch_id, name, login, avatar FROM streamers
        WHERE live=1 AND ever=1 ORDER BY last_scan LIMIT ?`, Math.ceil(budget * 0.35)).toArray())
+    /* On garde 3 places pour la file D. Sans cette réserve, A+B+C consomment tout le
+       budget dès qu'il y a une vingtaine de streamers en live, et les hors-ligne ne sont
+       jamais balayés — or un streamer peut laisser une tombola tourner après avoir coupé. */
+    const reserve = 3
     push(this.sql.exec(
       `SELECT twitch_id, name, login, avatar FROM streamers
-       WHERE live=1 ORDER BY last_scan LIMIT ?`, Math.ceil(budget * 0.45)).toArray())
+       WHERE live=1 ORDER BY last_scan LIMIT ?`, Math.max(0, budget - out.length - reserve)).toArray())
     push(this.sql.exec(
       'SELECT twitch_id, name, login, avatar FROM streamers ORDER BY last_scan LIMIT ?', budget).toArray())
     return out
+  }
+
+  /* Amorçage. `/tombola/latest/{twitchId}` ne renvoie que la DERNIÈRE tombola d'un
+     streamer : un scanner démarré en cours d'event ne peut donc jamais retrouver les
+     précédentes — mesuré, 22 des 46 streamers concernés en avaient lancé plusieurs.
+     `/tombola/{id}` fonctionne en revanche pour n'importe quel identifiant connu.
+
+     On insère donc des lignes vides ne contenant qu'un identifiant et le streamer à qui
+     l'attribuer. Le scan normal (file A) les remplit ensuite en interrogeant l'API
+     officielle : aucune donnée n'est recopiée ici, seulement des identifiants. */
+  seed () {
+    if (this.meta('seeded') === SEED.eventId) return 0
+    if (this.meta('event_id') !== SEED.eventId) return 0    // autre édition : rien à amorcer
+    let n = 0
+    for (const [id, twitchId] of SEED.tombolas) {
+      const r = this.sql.exec(
+        `INSERT INTO tombolas(id,twitch_id,drawn,cents,n_dons,winners,top,first_seen,last_seen)
+         VALUES(?,?,0,0,0,'[]','[]',?,0) ON CONFLICT(id) DO NOTHING`, id, String(twitchId), now())
+      n += r.rowsWritten ? 1 : 0
+    }
+    this.setMeta('seeded', SEED.eventId)
+    this.setMeta('seeded_n', n)
+    return n
   }
 
   async alarm () {
@@ -236,6 +272,7 @@ export class Scanner extends DurableObject {
       if (now() - Number(this.meta('streamers_at', 0)) > 180) {
         try { await this.refreshStreamers(); used++ } catch { /* on réessaiera */ }
       }
+      this.seed()
       const budget = Math.max(0, BUDGET - used)
       for (const it of this.targets(budget)) {
         if (rate) break
@@ -244,13 +281,20 @@ export class Scanner extends DurableObject {
         try {
           const d = await this.get(url)
           if (it.twitch_id) this.sql.exec('UPDATE streamers SET last_scan=? WHERE twitch_id=?', now(), it.twitch_id)
-          if (!d?.tombola) continue
+          if (!d?.tombola) {
+            // réponse valide mais sans tombola : l'identifiant n'existe plus, on le retire
+            if (it.byId) this.sql.exec('DELETE FROM tombolas WHERE id=? AND last_seen=0', it.byId)
+            continue
+          }
           const r = this.saveTombola(d.tombola, {
             twitchId: it.twitch_id ?? null, name: it.name, login: it.login, avatar: it.avatar,
           })
           if (r) { hits++; if (r.isNew && !d.tombola.drawn) events.push(r.id) }
         } catch (e) {
           if (e.rateLimited) { rate = true; break }
+          // 404 sur un identifiant : la tombola a été supprimée du module officiel.
+          // On retire le repère, sinon il occupe une place dans la file A indéfiniment.
+          if (e.notFound && it.byId) this.sql.exec('DELETE FROM tombolas WHERE id=? AND last_seen=0', it.byId)
           if (it.twitch_id) this.sql.exec('UPDATE streamers SET last_scan=? WHERE twitch_id=?', now(), it.twitch_id)
         }
       }
@@ -308,6 +352,8 @@ export class Scanner extends DurableObject {
         dons: all.reduce((a, x) => a + (x.nDons || 0), 0),
         winners: past.reduce((a, x) => a + x.winners.length, 0),
         streamers: Number(this.meta('streamers_n', 0)),
+        seeded: Number(this.meta('seeded_n', 0)),
+        pendingSeed: this.sql.exec('SELECT COUNT(*) n FROM tombolas WHERE last_seen=0').toArray()[0]?.n ?? 0,
         scanAt: Number(this.meta('scan_at', 0)) || null,
         scanUsed: Number(this.meta('scan_used', 0)),
         rateLimitedAt: Number(this.meta('rate_limited_at', 0)) || null,
