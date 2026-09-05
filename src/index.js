@@ -475,12 +475,12 @@ export class Scanner extends DurableObject {
   }
 }
 
-/* Nom de l'instance du Durable Object. Le plafond journalier du plan gratuit avait été
-   atteint et le blocage persistait après le passage en payant ; changer de nom crée une
-   instance neuve, avec son propre stockage. À ne toucher qu'en cas de blocage : on repart
-   d'une base vide — les tombolas sont réamorcées depuis src/seed.json en quelques minutes,
-   mais les compteurs de fréquentation de l'ancienne instance ne suivent pas. */
-const SCANNER_ID = 'main2'
+/* Nom de l'instance du Durable Object. En changer crée une instance NEUVE, avec un
+   stockage vide : les tombolas se réamorcent depuis src/seed.json en quelques minutes,
+   mais les compteurs de fréquentation sont perdus. Ce levier n'a d'intérêt que si une
+   instance devient définitivement inutilisable — ça n'a pas servi lors du blocage de
+   quota du 5 septembre, que le passage en plan payant a fini par lever de lui-même. */
+const SCANNER_ID = 'main'
 const stub = env => env.SCANNER.get(env.SCANNER.idFromName(SCANNER_ID))
 
 export default {
