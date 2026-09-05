@@ -311,6 +311,11 @@ track('view')
 
 const td = $('#topdon'); if (td) td.addEventListener('click', () => track('don'))
 
+/* Signal de présence, une fois par minute et seulement quand l'onglet est visible.
+   Le serveur le garde en mémoire : ça alimente le compteur « connectés maintenant »
+   sans écrire une seule ligne en base. */
+setInterval(() => { if (!document.hidden) track('ping') }, 60_000)
+
 paintBell()
 tick().then(schedule)
 document.addEventListener('visibilitychange', () => {

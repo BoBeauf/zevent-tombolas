@@ -26,7 +26,9 @@ const BUDGET = 25
 /* Types d'événements acceptés par /api/hit. Liste blanche stricte : l'endpoint est
    public, sans elle n'importe qui pourrait créer des compteurs arbitraires. */
 const EVENTS = ['notif_on', 'notif_off', 'notif_granted', 'don', 'twitch', 'pseudo', 'share']
-const KINDS = new Set(['view', ...EVENTS])
+// 'ping' est traité à part : présence en mémoire, jamais écrit en base
+const KINDS = new Set(['view', 'ping', ...EVENTS])
+const ONLINE_MS = 90_000   // au-delà, un onglet est considéré parti
 
 const now = () => Math.floor(Date.now() / 1000)
 const str = v => (v == null ? null : typeof v === 'string' ? v : String(v))
@@ -74,6 +76,8 @@ export class Scanner extends DurableObject {
       CREATE INDEX IF NOT EXISTS i_hits_day ON hits(day);
       CREATE INDEX IF NOT EXISTS i_vis_day ON visitors(day);
       CREATE INDEX IF NOT EXISTS i_ev_day ON ev(day);
+      -- une ligne par heure : de quoi tracer la courbe des visites sans faire grossir la base
+      CREATE TABLE IF NOT EXISTS vhits(h INTEGER PRIMARY KEY, n INTEGER);
     `)
     /* Caches mémoire. Le Durable Object est un processus qui vit entre les requêtes :
        tout ce qui est relu à l'identique n'a aucune raison de repasser par SQLite, et
@@ -133,10 +137,24 @@ export class Scanner extends DurableObject {
   }
 
   hit (vid, kind) {
+    const v0 = vid ? String(vid).slice(0, 24) : null
+    /* Présence : uniquement en mémoire. Un onglet ouvert envoie un signal par minute ;
+       sans cette table volatile il faudrait une écriture par signal, soit le compteur
+       le plus coûteux de l'app pour l'information la moins durable. */
+    if (v0) {
+      this.online = this.online || new Map()
+      this.online.set(v0, Date.now())
+      if (this.online.size > 5000) for (const [k, t] of this.online) if (Date.now() - t > ONLINE_MS) this.online.delete(k)
+    }
+    if (kind === 'ping') return
     const day = new Date().toISOString().slice(0, 10)
     this.sql.exec('INSERT INTO hits(day,kind,n) VALUES(?,?,1) ON CONFLICT(day,kind) DO UPDATE SET n=n+1', day, kind)
-    const v = vid ? String(vid).slice(0, 24) : null
-    if (v && kind === 'view') this.sql.exec('INSERT OR IGNORE INTO visitors(day,vid) VALUES(?,?)', day, v)
+    const v = v0
+    if (v && kind === 'view') {
+      this.sql.exec('INSERT OR IGNORE INTO visitors(day,vid) VALUES(?,?)', day, v)
+      const h = Math.floor(Date.now() / 3600_000)
+      this.sql.exec('INSERT INTO vhits(h,n) VALUES(?,1) ON CONFLICT(h) DO UPDATE SET n=n+1', h)
+    }
     else if (v) this.sql.exec('INSERT OR IGNORE INTO ev(day,kind,vid) VALUES(?,?,?)', day, kind, v)
     this.purge()
   }
@@ -154,6 +172,7 @@ export class Scanner extends DurableObject {
     this.sql.exec('DELETE FROM hits WHERE day < ?', cut)
     this.sql.exec('DELETE FROM visitors WHERE day < ?', cut)
     this.sql.exec('DELETE FROM ev WHERE day < ?', cut)
+    this.sql.exec('DELETE FROM vhits WHERE h < ?', Math.floor(Date.now() / 3600_000) - 24 * 30)
   }
 
   stats () {
@@ -175,8 +194,13 @@ export class Scanner extends DurableObject {
       ev[k] = { clicks: all, clicksToday: day, people: pAll, peopleToday: pDay }
     }
     const totalVisitors = this.sql.exec('SELECT COUNT(DISTINCT vid) n FROM visitors').toArray()[0]?.n ?? 0
+    // présence : onglets ayant donné signe de vie dans les 90 dernières secondes
+    let online = 0
+    if (this.online) for (const t of this.online.values()) if (Date.now() - t < ONLINE_MS) online++
+    const h0 = Math.floor(Date.now() / 3600_000)
+    const hourly = this.sql.exec('SELECT h, n FROM vhits WHERE h > ? ORDER BY h', h0 - 48).toArray()
     return {
-      today, days: days.reverse(), events: ev, totalVisitors,
+      today, days: days.reverse(), events: ev, totalVisitors, online, hourly, nowHour: h0,
       // Le quota qui compte : 100 000 invocations de Worker par jour sur le plan gratuit.
       quota: { limit: 100_000, usedToday: t.views + t.api, note: 'estimation locale ; le chiffre autoritaire est dans le tableau de bord Cloudflare' },
       scan: { wakeupsPerDay: Math.round(86400 / (TICK_MS / 1000)), subrequestsPerDay: Math.round(86400 / (TICK_MS / 1000)) * BUDGET },

@@ -202,6 +202,12 @@ poste le lien avec un paramètre (`?v=2`) pour forcer un nouveau rendu.
   Object, sans cookie, sans IP et sans service tiers : chaque navigateur tire un
   identifiant aléatoire stocké chez lui, qui sert uniquement à ne pas compter dix fois la
   même personne dans la journée. Purge automatique au bout de 30 jours.
+- **Connectés en direct** : nombre d'onglets ayant donné signe de vie dans les 90 dernières
+  secondes. Le navigateur envoie un signal par minute, uniquement quand l'onglet est
+  visible, et le serveur le garde **en mémoire** — aucune écriture en base pour une
+  information aussi éphémère.
+- **Visites heure par heure** sur 24 h : une ligne par heure dans la table `vhits`, purgée
+  au bout de 30 jours.
 - **`GET /api/stats`** — les mêmes chiffres en JSON.
 - **Usage** : clics sur « Participer » et « Regarder », alertes activées, notifications
   autorisées, pseudos renseignés. Chaque événement est compté **en clics et en personnes

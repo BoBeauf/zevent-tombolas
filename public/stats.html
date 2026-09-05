@@ -32,6 +32,20 @@
   .u .s b{color:var(--txt)}
   .u.hl{border-color:rgba(255,201,77,.4);background:linear-gradient(150deg,rgba(255,201,77,.09),var(--card2))}
   .u.hl .v{color:var(--gold)}
+  .online{display:flex;align-items:baseline;gap:12px}
+  .online b{font-size:52px;font-weight:850;letter-spacing:-.03em;color:var(--green);line-height:1}
+  .online .lbl2{font-size:15px;color:var(--dim)}
+  .pulse{width:11px;height:11px;border-radius:50%;background:var(--green);align-self:center;
+    box-shadow:0 0 0 0 rgba(61,220,132,.6);animation:pz 2s infinite}
+  @keyframes pz{70%{box-shadow:0 0 0 11px rgba(61,220,132,0)}100%{box-shadow:0 0 0 0 rgba(61,220,132,0)}}
+  .hbars{display:flex;align-items:flex-end;gap:3px;height:150px;margin-top:4px}
+  .hb{flex:1;background:linear-gradient(180deg,var(--gold),#ff9e4d);border-radius:3px 3px 0 0;
+    min-height:2px;position:relative}
+  .hb.now{background:linear-gradient(180deg,var(--green),#2fa968)}
+  .hb:hover::after{content:attr(data-t);position:absolute;bottom:100%;left:50%;transform:translateX(-50%);
+    background:#11131c;border:1px solid var(--line);border-radius:7px;padding:5px 8px;font-size:11.5px;
+    white-space:nowrap;margin-bottom:5px;z-index:5;color:var(--txt)}
+  .hax{display:flex;justify-content:space-between;font-size:11px;color:var(--dim2);margin-top:5px;font-weight:600}
 </style>
 </head>
 <body>
@@ -40,9 +54,18 @@
   <a class="by" href="/">← retour au site</a></div>
 </header>
 <main>
+  <div class="card" id="livecard">
+    <h2>En ce moment</h2>
+    <div class="online"><span class="pulse"></span><b id="online">—</b><span class="lbl2">personnes sur le site</span></div>
+    <div class="tiny" style="color:var(--dim2);margin-top:6px">onglets ayant donné signe de vie dans les 90 dernières secondes</div>
+  </div>
   <div class="card">
     <h2>Aujourd'hui</h2>
     <div class="kfig" id="today"></div>
+  </div>
+  <div class="card">
+    <h2>Visites heure par heure <span style="text-transform:none;letter-spacing:0;font-weight:500;color:#5d6480" id="hinfo"></span></h2>
+    <div class="hbars" id="hourly"></div>
   </div>
   <div class="card">
     <h2>Quota Cloudflare du jour</h2>
@@ -126,6 +149,30 @@ fetch('/api/stats', { cache: 'no-store' }).then(r => r.json()).then(S => {
     (une alarme toutes les 10 s) et émet <b>${num(S.scan.subrequestsPerDay)}</b> requêtes vers les API du ZEvent.
     Ces requêtes sortantes ne comptent pas dans le quota des 100 000 : seul le trafic entrant compte.
     <br>Comptage démarré le ${S.since || '—'}.`
+  $('#online').textContent = num(S.online || 0)
+
+  // Histogramme des visites : une barre par heure sur les 48 dernières
+  const H = S.hourly || []
+  const box = $('#hourly')
+  if (!H.length) { box.innerHTML = '<div class="empty" style="align-self:center">Pas encore de visite enregistrée.</div>' }
+  else {
+    const byH = new Map(H.map(r => [r.h, r.n]))
+    const from = S.nowHour - 23
+    const bars = []
+    for (let h = from; h <= S.nowHour; h++) bars.push([h, byH.get(h) || 0])
+    const max = Math.max(1, ...bars.map(b => b[1]))
+    // toLocaleTimeString en fr-FR renvoie déjà « 18 h » : ne pas rajouter le « h »
+    const heure = h => new Date(h * 3600000).toLocaleTimeString('fr-FR', { hour: '2-digit' })
+    const jour = h => new Date(h * 3600000).toLocaleDateString('fr-FR', { weekday: 'short' })
+    box.innerHTML = bars.map(([h, n]) => `<div class="hb${h === S.nowHour ? ' now' : ''}"
+      style="height:${Math.max(2, 100 * n / max).toFixed(1)}%" data-t="${jour(h)} ${heure(h)} — ${num(n)} visite${n > 1 ? 's' : ''}"></div>`).join('')
+    document.querySelector('.hax')?.remove()
+    box.insertAdjacentHTML('afterend',
+      `<div class="hax"><span>${jour(from)} ${heure(from)}</span><span>${heure(S.nowHour)}, en cours</span></div>`)
+    const tot = bars.reduce((a, b) => a + b[1], 0)
+    $('#hinfo').textContent = `— ${num(tot)} visites sur 24 h, pic à ${num(max)}`
+  }
+
   const tvEl = $('#tv'); if (tvEl) tvEl.textContent = num(tv)
 }).catch(() => { $('#today').textContent = 'Stats indisponibles.' })
 </script>
