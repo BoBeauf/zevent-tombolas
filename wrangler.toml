@@ -1,0 +1,29 @@
+# Déploiement : npx wrangler deploy
+# Tout tient dans le plan gratuit : Workers (100 000 requêtes/jour), Durable Objects
+# avec stockage SQLite (gratuit sur le plan Free), et les fichiers statiques.
+name = "zevent-tombolas"
+main = "src/index.js"
+compatibility_date = "2026-09-01"
+
+# Le front est servi tel quel ; le Worker ne voit que ce qui ne correspond à aucun fichier.
+[assets]
+directory = "./public"
+
+# Le scanner : un seul objet, nommé "main", qui se réveille tout seul par alarme.
+[[durable_objects.bindings]]
+name = "SCANNER"
+class_name = "Scanner"
+
+# Le stockage SQLite est le seul disponible sur le plan gratuit.
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["Scanner"]
+
+# Filet de sécurité : si l'alarme se perdait (redéploiement, incident), ce cron
+# la réarme. Une minute est la granularité minimale des Cron Triggers, d'où l'alarme
+# du Durable Object pour le scan rapide.
+[triggers]
+crons = ["*/5 * * * *"]
+
+[observability]
+enabled = true

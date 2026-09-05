@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Tombolas ZEvent — qui en lance une, là, maintenant</title>
+<meta name="description" content="Les tombolas du ZEvent en direct : qui en lance une, combien de temps il reste, et qui a gagné.">
+<meta name="theme-color" content="#0b0c12">
+<meta property="og:title" content="Tombolas ZEvent en direct">
+<meta property="og:description" content="Qui lance une tombola, là, maintenant — et qui a gagné.">
+<meta property="og:type" content="website">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%8E%9F%EF%B8%8F%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header class="top">
+  <div class="brand"><span class="tk">🎟️</span> Tombolas <b>ZEvent</b></div>
+  <div class="sp"></div>
+  <button class="ghost" id="bell" title="Être prévenu quand une tombola démarre">🔔 <span id="belllbl">Alertes</span></button>
+  <a class="ghost" href="https://zevent.fr/don" target="_blank" rel="noopener">Faire un don ↗</a>
+</header>
+
+<main>
+  <section class="hero" id="hero">
+    <div class="headline" id="headline">Chargement…</div>
+    <div class="sub" id="sub"></div>
+    <div class="pills" id="heropills"></div>
+  </section>
+
+  <section id="activewrap">
+    <h2 class="sec">En cours <span class="n" id="nactive"></span></h2>
+    <div class="cards" id="active"></div>
+  </section>
+
+  <section id="pendingwrap" hidden>
+    <h2 class="sec">Tirage imminent <span class="n" id="npending"></span></h2>
+    <div class="cards" id="pending"></div>
+  </section>
+
+  <section id="pastwrap">
+    <h2 class="sec">Derniers tirages <span class="n" id="npast"></span></h2>
+    <div class="win-search">
+      <input id="me" placeholder="Ton pseudo de donateur — pour savoir si tu as gagné" autocomplete="off" spellcheck="false">
+      <button class="ghost" id="meclear" hidden>✕</button>
+    </div>
+    <div id="verdict"></div>
+    <div class="results" id="past"></div>
+  </section>
+
+  <footer>
+    <p id="foot"></p>
+    <p class="fine">
+      Données publiques du module officiel de tombola (<code>app.zevent.fr</code>) et
+      d'<code>evenmorestats</code>, lues en GET uniquement — aucune écriture, aucune
+      authentification, aucun compte.
+      <br>Seules les tombolas créées dans le <b>module officiel</b> sont visibles ici : un
+      streamer qui gère son tirage autrement (bot de chat, overlay maison, annonce à l'oral)
+      n'apparaîtra pas, même si sa tombola est bien réelle.
+      <br>Projet indépendant, sans lien avec l'organisation du ZEvent.
+      <a href="https://github.com/BoBeauf/zevent-tombolas" target="_blank" rel="noopener">Code source ↗</a>
+    </p>
+  </footer>
+</main>
+
+<div id="toasts"></div>
+<script src="/app.js"></script>
+</body>
+</html>
