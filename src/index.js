@@ -248,7 +248,7 @@ export class Scanner extends DurableObject {
         last_scan: prev?.last_scan || 0,
       })
     }
-    this.setMeta('streamers_at', t)
+    this.stAt = t
     this.setMeta('streamers_n', list.length)
     this.cache.at = 0
   }
@@ -353,8 +353,12 @@ export class Scanner extends DurableObject {
     let used = 0, hits = 0, rate = false
     const events = []
     try {
-      // La liste des participants coûte une requête ; on la rafraîchit toutes les 3 min.
-      if (now() - Number(this.meta('streamers_at', 0)) > 180) {
+      /* Le marqueur de fraîcheur DOIT vivre en mémoire, comme la liste elle-même :
+         s'il était lu en base, l'objet croirait la liste à jour après un redémarrage
+         alors que la mémoire est vide — plus aucun streamer en live, et les files B, C
+         et D sans rien à parcourir. On force donc aussi le rafraîchissement si la carte
+         est vide, quelle que soit la date du dernier appel. */
+      if (this.st.size === 0 || now() - (this.stAt || 0) > 180) {
         try { await this.refreshStreamers(); used++ } catch { /* on réessaiera */ }
       }
       this.seed()
@@ -458,7 +462,8 @@ export class Scanner extends DurableObject {
         cents: all.reduce((a, x) => a + (x.cents || 0), 0),
         dons: all.reduce((a, x) => a + (x.nDons || 0), 0),
         winners: past.reduce((a, x) => a + x.winners.length, 0),
-        streamers: Number(this.meta('streamers_n', 0)),
+        streamers: this.st.size || Number(this.meta('streamers_n', 0)),
+        streamersReady: this.st.size > 0,
         seeded: Number(this.meta('seeded_n', 0)),
         pendingSeed: this.sql.exec('SELECT COUNT(*) n FROM tombolas WHERE last_seen=0').toArray()[0]?.n ?? 0,
         scanAt: this.scanAt || Number(this.meta('scan_at', 0)) || null,
@@ -470,7 +475,13 @@ export class Scanner extends DurableObject {
   }
 }
 
-const stub = env => env.SCANNER.get(env.SCANNER.idFromName('main'))
+/* Nom de l'instance du Durable Object. Le plafond journalier du plan gratuit avait été
+   atteint et le blocage persistait après le passage en payant ; changer de nom crée une
+   instance neuve, avec son propre stockage. À ne toucher qu'en cas de blocage : on repart
+   d'une base vide — les tombolas sont réamorcées depuis src/seed.json en quelques minutes,
+   mais les compteurs de fréquentation de l'ancienne instance ne suivent pas. */
+const SCANNER_ID = 'main2'
+const stub = env => env.SCANNER.get(env.SCANNER.idFromName(SCANNER_ID))
 
 export default {
   async fetch (req, env, ctx) {
