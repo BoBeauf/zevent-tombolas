@@ -45,6 +45,12 @@ export class Scanner extends DurableObject {
         cents INTEGER, n_dons INTEGER, top TEXT,
         first_seen INTEGER, last_seen INTEGER);
       CREATE INDEX IF NOT EXISTS i_tb_drawn ON tombolas(drawn, end_ts);
+      /* Fréquentation. Le tableau de bord Cloudflare compte les requêtes, ce qui mélange
+         chargements de page et sondages d'API — on compte donc les visites nous-mêmes.
+         « vid » est un identifiant aléatoire tiré par le navigateur, sans lien avec l'IP :
+         il permet de distinguer deux visites du même visiteur, rien d'autre. */
+      CREATE TABLE IF NOT EXISTS hits(day TEXT, kind TEXT, n INTEGER, PRIMARY KEY(day, kind));
+      CREATE TABLE IF NOT EXISTS visitors(day TEXT, vid TEXT, PRIMARY KEY(day, vid));
     `)
     ctx.blockConcurrencyWhile(async () => { await this.arm() })
   }
@@ -67,7 +73,37 @@ export class Scanner extends DurableObject {
     const u = new URL(req.url)
     await this.arm()
     if (u.pathname === '/scan') return new Response('ok')
+    if (u.pathname === '/hit') { this.hit(u.searchParams.get('v'), u.searchParams.get('k') || 'view'); return new Response('ok') }
+    if (u.pathname === '/stats') return Response.json(this.stats())
     return Response.json(this.payload())
+  }
+
+  hit (vid, kind) {
+    const day = new Date().toISOString().slice(0, 10)
+    this.sql.exec('INSERT INTO hits(day,kind,n) VALUES(?,?,1) ON CONFLICT(day,kind) DO UPDATE SET n=n+1', day, kind)
+    if (vid) this.sql.exec('INSERT OR IGNORE INTO visitors(day,vid) VALUES(?,?)', day, String(vid).slice(0, 24))
+    // 30 jours d'historique suffisent, et le stockage reste minuscule
+    const cut = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
+    this.sql.exec('DELETE FROM hits WHERE day < ?', cut)
+    this.sql.exec('DELETE FROM visitors WHERE day < ?', cut)
+  }
+
+  stats () {
+    const days = this.sql.exec(
+      `SELECT h.day,
+              COALESCE(SUM(CASE WHEN h.kind='view' THEN h.n END),0) AS views,
+              (SELECT COUNT(*) FROM visitors v WHERE v.day = h.day) AS visitors,
+              COALESCE(SUM(CASE WHEN h.kind='api' THEN h.n END),0) AS api
+       FROM hits h GROUP BY h.day ORDER BY h.day DESC LIMIT 14`).toArray()
+    const today = new Date().toISOString().slice(0, 10)
+    const t = days.find(d => d.day === today) || { views: 0, visitors: 0, api: 0 }
+    return {
+      today, days: days.reverse(),
+      // Le quota qui compte : 100 000 invocations de Worker par jour sur le plan gratuit.
+      quota: { limit: 100_000, usedToday: t.views + t.api, note: 'estimation locale ; le chiffre autoritaire est dans le tableau de bord Cloudflare' },
+      scan: { wakeupsPerDay: Math.round(86400 / (TICK_MS / 1000)), subrequestsPerDay: Math.round(86400 / (TICK_MS / 1000)) * BUDGET },
+      since: this.sql.exec('SELECT MIN(day) d FROM hits').toArray()[0]?.d ?? null,
+    }
   }
 
   async get (url, timeoutMs = 12_000) {
@@ -286,6 +322,18 @@ const stub = env => env.SCANNER.get(env.SCANNER.idFromName('main'))
 export default {
   async fetch (req, env, ctx) {
     const u = new URL(req.url)
+    // Balise de fréquentation : un appel par chargement de page, pas par sondage.
+    if (u.pathname === '/api/hit') {
+      const vid = u.searchParams.get('v') || ''
+      ctx.waitUntil(stub(env).fetch('https://do/hit?k=view&v=' + encodeURIComponent(vid)))
+      return new Response(null, { status: 204, headers: { 'access-control-allow-origin': '*' } })
+    }
+    if (u.pathname === '/api/stats') {
+      const r = await stub(env).fetch('https://do/stats')
+      return new Response(r.body, {
+        headers: { 'content-type': 'application/json; charset=utf-8', 'cache-control': 'public, max-age=30' },
+      })
+    }
     if (u.pathname === '/api/tombolas') {
       /* Cache d'arête explicite. Une réponse de Worker n'est pas mise en cache
          automatiquement : sans ce bloc, chaque sondage de chaque visiteur réveillerait
@@ -295,6 +343,7 @@ export default {
       const cache = caches.default
       const hit = await cache.match(key)
       if (hit) return hit
+      ctx.waitUntil(stub(env).fetch('https://do/hit?k=api'))
       const r = await stub(env).fetch('https://do/payload')
       const res = new Response(r.body, {
         headers: {

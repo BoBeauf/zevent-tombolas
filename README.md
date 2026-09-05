@@ -110,6 +110,19 @@ L'édition en cours est **découverte automatiquement** depuis `api.evenmorestat
 (celle dont le calendrier contient l'instant présent, sinon la plus récente) : l'outil
 survit à l'édition suivante sans redéploiement.
 
+## Voir les stats du site
+
+- **`/stats`** — page intégrée : visites et visiteurs distincts du jour, historique sur
+  14 jours, jauge de consommation du quota gratuit. Le comptage se fait dans le Durable
+  Object, sans cookie, sans IP et sans service tiers : chaque navigateur tire un
+  identifiant aléatoire stocké chez lui, qui sert uniquement à ne pas compter dix fois la
+  même personne dans la journée. Purge automatique au bout de 30 jours.
+- **`GET /api/stats`** — les mêmes chiffres en JSON.
+- **Tableau de bord Cloudflare** (Workers & Pages → `zevent-tombolas` → Metrics) — le
+  chiffre **autoritaire** pour le quota : requêtes, taux d'erreur, temps CPU. C'est là
+  qu'il faut regarder pour savoir si on approche des 100 000 requêtes par jour.
+- **`npx wrangler tail`** — les journaux en direct, pratique pour voir passer les erreurs.
+
 ## Sources
 
 | Source | Ce qu'on en tire |

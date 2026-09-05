@@ -261,6 +261,18 @@ function schedule () {
   clearInterval(timer)
   timer = setInterval(tick, want)
 }
+/* Balise de fréquentation : un appel au chargement, jamais pendant les sondages.
+   L'identifiant est tiré au sort dans le navigateur — aucune IP, aucun cookie, aucun
+   tiers : il sert seulement à ne pas compter dix fois la même personne dans la journée. */
+;(function beacon () {
+  let vid = ''
+  try {
+    vid = localStorage.getItem('zt.vid') || ''
+    if (!vid) { vid = Math.random().toString(36).slice(2, 12); localStorage.setItem('zt.vid', vid) }
+  } catch {}
+  fetch('/api/hit?v=' + encodeURIComponent(vid), { method: 'GET', keepalive: true }).catch(() => {})
+})()
+
 paintBell()
 tick().then(schedule)
 document.addEventListener('visibilitychange', () => {

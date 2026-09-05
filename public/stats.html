@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Stats — Tombolas ZEvent</title>
+<meta name="robots" content="noindex">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Ctext y='26' font-size='26'%3E%F0%9F%93%8A%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/style.css">
+<style>
+  .bars{display:flex;flex-direction:column;gap:7px;margin-top:6px}
+  .bar{display:grid;grid-template-columns:92px 1fr 116px;gap:11px;align-items:center;font-size:12.5px}
+  .bar .d{color:var(--dim2);font-variant-numeric:tabular-nums}
+  .bar .t{height:9px;background:rgba(255,255,255,.06);border-radius:99px;overflow:hidden}
+  .bar .f{height:100%;background:linear-gradient(90deg,var(--gold),#ff9e4d);border-radius:99px}
+  .bar .v{text-align:right;font-variant-numeric:tabular-nums}
+  .bar .v b{font-weight:750}
+  .bar.today .d{color:var(--gold);font-weight:700}
+  .gauge{height:12px;background:rgba(255,255,255,.07);border-radius:99px;overflow:hidden;margin:10px 0 6px}
+  .gauge .f{height:100%;background:linear-gradient(90deg,var(--gold),#ff9e4d)}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:16px;padding:18px 20px;margin-bottom:14px}
+  .card h2{font-size:12.5px;font-weight:750;text-transform:uppercase;letter-spacing:.11em;color:var(--dim);margin-bottom:12px}
+  .kfig{display:flex;gap:22px;flex-wrap:wrap}
+  .kfig > div{min-width:120px}
+  .kfig .k{font-size:11px;color:var(--dim2);text-transform:uppercase;letter-spacing:.08em}
+  .kfig .v{font-size:28px;font-weight:850;letter-spacing:-.03em;margin-top:2px;font-variant-numeric:tabular-nums}
+</style>
+</head>
+<body>
+<header class="top">
+  <div class="idbox"><div class="brand"><span class="tk">📊</span> Stats <b>Tombolas</b></div>
+  <a class="by" href="/">← retour au site</a></div>
+</header>
+<main>
+  <div class="card">
+    <h2>Aujourd'hui</h2>
+    <div class="kfig" id="today"></div>
+  </div>
+  <div class="card">
+    <h2>Quota Cloudflare du jour</h2>
+    <div class="gauge"><div class="f" id="qf" style="width:0%"></div></div>
+    <div class="tiny" id="quota" style="color:var(--dim)"></div>
+  </div>
+  <div class="card">
+    <h2>14 derniers jours</h2>
+    <div class="bars" id="days"></div>
+  </div>
+  <div class="card">
+    <h2>Le scanner</h2>
+    <div class="tiny" id="scan" style="color:var(--dim);line-height:1.7"></div>
+  </div>
+  <p class="fine" style="color:var(--dim2);font-size:12px;line-height:1.7">
+    Le comptage se fait dans le Durable Object, sans cookie, sans IP et sans service tiers :
+    chaque navigateur tire un identifiant aléatoire stocké chez lui, qui sert uniquement à ne
+    pas compter dix fois la même personne dans la journée. L'historique est purgé au bout de 30 jours.
+    <br>Le chiffre <b>autoritaire</b> pour le quota reste celui du tableau de bord Cloudflare
+    (Workers &amp; Pages → zevent-tombolas → Metrics).
+  </p>
+</main>
+<script>
+const $ = s => document.querySelector(s)
+const NUM = new Intl.NumberFormat('fr-FR')
+const num = n => NUM.format(Math.round(n || 0))
+fetch('/api/stats').then(r => r.json()).then(S => {
+  const t = S.days.find(d => d.day === S.today) || { views: 0, visitors: 0, api: 0 }
+  $('#today').innerHTML = [
+    ['Visites', t.views], ['Visiteurs distincts', t.visitors], ['Appels d\'API servis', t.api],
+  ].map(([k, v]) => `<div><div class="k">${k}</div><div class="v">${num(v)}</div></div>`).join('')
+
+  const used = S.quota.usedToday, pct = Math.min(100, 100 * used / S.quota.limit)
+  $('#qf').style.width = pct.toFixed(2) + '%'
+  $('#quota').innerHTML = `<b style="color:var(--txt)">${num(used)}</b> requêtes sur ${num(S.quota.limit)} par jour
+    — soit ${pct.toFixed(pct < 1 ? 2 : 1)} % du plan gratuit.
+    ${pct < 50 ? 'Large.' : pct < 80 ? 'Ça commence à monter.' : 'Proche du plafond : passe la cadence au repos à 30 s dans public/app.js.'}
+    <br><span style="color:var(--dim2)">${S.quota.note}</span>`
+
+  const max = Math.max(1, ...S.days.map(d => d.views))
+  $('#days').innerHTML = S.days.length
+    ? S.days.slice().reverse().map(d => `<div class="bar${d.day === S.today ? ' today' : ''}">
+        <div class="d">${d.day.slice(5)}${d.day === S.today ? ' · auj.' : ''}</div>
+        <div class="t"><div class="f" style="width:${(100 * d.views / max).toFixed(1)}%"></div></div>
+        <div class="v"><b>${num(d.views)}</b> vis. · ${num(d.visitors)} pers.</div></div>`).join('')
+    : '<div class="empty">Pas encore de visite enregistrée.</div>'
+
+  $('#scan').innerHTML = `Le scanner se réveille <b>${num(S.scan.wakeupsPerDay)}</b> fois par jour
+    (une alarme toutes les 10 s) et émet <b>${num(S.scan.subrequestsPerDay)}</b> requêtes vers les API du ZEvent.
+    Ces requêtes sortantes ne comptent pas dans le quota des 100 000 : seul le trafic entrant compte.
+    <br>Comptage démarré le ${S.since || '—'}.`
+}).catch(() => { $('#today').textContent = 'Stats indisponibles.' })
+</script>
+</body>
+</html>
