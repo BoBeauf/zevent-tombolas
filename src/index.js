@@ -100,7 +100,12 @@ export class Scanner extends DurableObject {
      donc l'échec : la lecture continue de fonctionner même si la replanification échoue. */
   async arm () {
     try {
-      if ((await this.ctx.storage.getAlarm()) == null) await this.ctx.storage.setAlarm(Date.now() + 1000)
+      const a = await this.ctx.storage.getAlarm()
+      /* Une alarme dont l'heure est passée ne se déclenchera jamais : c'est ce qui arrive
+         quand la replanification échoue (quota d'écritures atteint) au moment où l'alarme
+         se consomme. On la reposait alors « seulement si absente » — et elle n'était pas
+         absente, juste morte. Le scanner restait à l'arrêt même une fois le quota rétabli. */
+      if (a == null || a < Date.now() - 60_000) await this.ctx.storage.setAlarm(Date.now() + 1000)
     } catch (e) {
       this.armError = String(e.message || e)
     }
@@ -504,7 +509,11 @@ export default {
       const backupKey = new Request(new URL('/api/tombolas-secours', u.origin), { method: 'GET' })
       const cache = caches.default
       const hit = await cache.match(key)
-      if (hit) return hit
+      if (hit) {
+        // même servi depuis le cache, on s'assure de temps en temps que l'alarme vit
+        if (Math.random() < 0.02) ctx.waitUntil(stub(env).fetch('https://do/scan').catch(() => {}))
+        return hit
+      }
       try {
         ctx.waitUntil(stub(env).fetch('https://do/hit?k=api'))
         const r = await stub(env).fetch('https://do/payload')
