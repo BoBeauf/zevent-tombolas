@@ -199,8 +199,11 @@ export class Scanner extends DurableObject {
     if (this.online) for (const t of this.online.values()) if (Date.now() - t < ONLINE_MS) online++
     const h0 = Math.floor(Date.now() / 3600_000)
     const hourly = this.sql.exec('SELECT h, n FROM vhits WHERE h > ? ORDER BY h', h0 - 48).toArray()
+    // instant où la mesure horaire a commencé : avant, il n'y a pas « zéro visite »,
+    // il n'y a pas de mesure du tout — la distinction doit apparaître sur le graphe
+    const hourlySince = this.sql.exec('SELECT MIN(h) h FROM vhits').toArray()[0]?.h ?? null
     return {
-      today, days: days.reverse(), events: ev, totalVisitors, online, hourly, nowHour: h0,
+      today, days: days.reverse(), events: ev, totalVisitors, online, hourly, hourlySince, nowHour: h0,
       // Le quota qui compte : 100 000 invocations de Worker par jour sur le plan gratuit.
       quota: { limit: 100_000, usedToday: t.views + t.api, note: 'estimation locale ; le chiffre autoritaire est dans le tableau de bord Cloudflare' },
       scan: { wakeupsPerDay: Math.round(86400 / (TICK_MS / 1000)), subrequestsPerDay: Math.round(86400 / (TICK_MS / 1000)) * BUDGET },
