@@ -15,7 +15,12 @@ const UA = 'zevent-tombolas/1.0 (usage personnel, lecture seule)'
    Le plan gratuit Workers plafonne à 50 sous-requêtes par invocation, ce qui rendrait un
    Cron Trigger (1 minute de granularité minimale) incapable de dépasser 0,8 req/s. D'où
    l'alarme de Durable Object, qui se replanifie librement en dessous de la minute. */
-const TICK_MS = 20_000
+/* Sur le plan payant, Cloudflare n'est plus le facteur limitant : à 10 s on consomme
+   0,16 % des lectures incluses. C'est l'API des organisateurs qui borne la cadence — elle
+   renvoie des 429 en rafale au-delà d'environ 2,9 requêtes par seconde (mesuré : 276
+   réponses 429 sur 339 requêtes à concurrence 4). 25 requêtes toutes les 10 s font
+   2,5 req/s, cadence sur laquelle aucun 429 n'a été observé en 38 balayages complets. */
+const TICK_MS = 10_000
 const BUDGET = 25
 
 /* Types d'événements acceptés par /api/hit. Liste blanche stricte : l'endpoint est
@@ -121,7 +126,7 @@ export class Scanner extends DurableObject {
        2,9 M lignes par jour : on le garde 20 s en mémoire, ce qui ne change rien à
        l'affichage (le scan tourne toutes les 15 s et les comptes à rebours sont calculés
        dans le navigateur). */
-    if (Date.now() - this.cache.at > 20_000 || !this.cache.v) {
+    if (Date.now() - this.cache.at > 8_000 || !this.cache.v) {
       this.cache = { at: Date.now(), v: JSON.stringify(this.payload()) }
     }
     return new Response(this.cache.v, { headers: { 'content-type': 'application/json' } })
@@ -533,11 +538,11 @@ export default {
         const mk = (ttl, extra = {}) => new Response(body, {
           headers: {
             'content-type': 'application/json; charset=utf-8',
-            'cache-control': `public, max-age=5, s-maxage=${ttl}`,
+            'cache-control': `public, max-age=3, s-maxage=${ttl}`,
             'access-control-allow-origin': '*', ...extra,
           },
         })
-        const res = mk(10)
+        const res = mk(5)
         ctx.waitUntil(cache.put(key, res.clone()))
         ctx.waitUntil(cache.put(backupKey, mk(43200)))   // 12 h : couvre une coupure jusqu'au reset
         return res
