@@ -79,6 +79,29 @@ Corrections :
 
 Résultat : **1,5 M lignes par jour, 70 % sous le plafond.**
 
+**Le piège suivant, lui, dépendait du trafic.** La purge des données de plus de 30 jours
+tournait à *chaque* visite et à *chaque* clic : trois `DELETE ... WHERE day < ?` sans index,
+donc trois balayages complets. Comme la table `visitors` grossit d'une ligne par visiteur
+et par jour, le coût était **quadratique** :
+
+| Visiteurs / jour | Avant | Après |
+|---|---|---|
+| 100 | 0,07 M | 0,001 M |
+| 1 000 | 6,2 M — plafond dépassé | 0,006 M |
+| 5 000 | 150 M | 0,030 M |
+| 20 000 | 2 400 M | 0,120 M |
+
+Correction : index sur `day`, et purge au plus une fois par heure (largement suffisant
+pour une rétention de 30 jours). Le coût devient linéaire et négligeable.
+
+### Est-ce que le trafic fait monter la consommation ?
+
+Après ces corrections, **les lignes lues ne dépendent quasiment plus du nombre de
+visiteurs** : le payload est construit au plus toutes les 20 s quoi qu'il arrive, et une
+visite ne coûte que deux lectures indexées. Ce qui monte avec l'audience, c'est le
+**nombre de requêtes Worker** — plafonné à 100 000 par jour, soit environ 800 sessions de
+10 minutes. C'est ce compteur-là qui limite l'audience, pas les lignes lues.
+
 ### Tenir dans le plan gratuit
 
 Le plan gratuit donne **100 000 requêtes par jour**. Un seul visiteur qui sonderait toutes

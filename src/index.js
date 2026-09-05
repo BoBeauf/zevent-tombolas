@@ -15,7 +15,7 @@ const UA = 'zevent-tombolas/1.0 (usage personnel, lecture seule)'
    Le plan gratuit Workers plafonne à 50 sous-requêtes par invocation, ce qui rendrait un
    Cron Trigger (1 minute de granularité minimale) incapable de dépasser 0,8 req/s. D'où
    l'alarme de Durable Object, qui se replanifie librement en dessous de la minute. */
-const TICK_MS = 15_000
+const TICK_MS = 20_000
 const BUDGET = 25
 
 /* Types d'événements acceptés par /api/hit. Liste blanche stricte : l'endpoint est
@@ -65,6 +65,10 @@ export class Scanner extends DurableObject {
       CREATE TABLE IF NOT EXISTS visitors(day TEXT, vid TEXT, PRIMARY KEY(day, vid));
       -- personnes distinctes par type d'événement (alerte activée, clic don, clic Twitch…)
       CREATE TABLE IF NOT EXISTS ev(day TEXT, kind TEXT, vid TEXT, PRIMARY KEY(day, kind, vid));
+      -- la purge filtre sur la colonne day : sans index elle balaie toute la table
+      CREATE INDEX IF NOT EXISTS i_hits_day ON hits(day);
+      CREATE INDEX IF NOT EXISTS i_vis_day ON visitors(day);
+      CREATE INDEX IF NOT EXISTS i_ev_day ON ev(day);
     `)
     /* Caches mémoire. Le Durable Object est un processus qui vit entre les requêtes :
        tout ce qui est relu à l'identique n'a aucune raison de repasser par SQLite, et
@@ -110,7 +114,18 @@ export class Scanner extends DurableObject {
     const v = vid ? String(vid).slice(0, 24) : null
     if (v && kind === 'view') this.sql.exec('INSERT OR IGNORE INTO visitors(day,vid) VALUES(?,?)', day, v)
     else if (v) this.sql.exec('INSERT OR IGNORE INTO ev(day,kind,vid) VALUES(?,?,?)', day, kind, v)
-    // 30 jours d'historique suffisent, et le stockage reste minuscule
+    this.purge()
+  }
+
+  /* Purge des données de plus de 30 jours. Elle tournait à CHAQUE visite et à chaque
+     clic : trois DELETE filtrant sur `day`, sans index, donc trois balayages complets.
+     Comme la table `visitors` grossit d'une ligne par visiteur et par jour, le coût
+     devenait quadratique — 1 000 visiteurs = 1 M de lignes lues rien que pour ça,
+     10 000 visiteurs = 100 M. C'est ce qui aurait explosé le jour où le lien marche.
+     Une fois par heure suffit largement pour une rétention de 30 jours. */
+  purge () {
+    if (Date.now() - (this.purgedAt || 0) < 3_600_000) return
+    this.purgedAt = Date.now()
     const cut = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
     this.sql.exec('DELETE FROM hits WHERE day < ?', cut)
     this.sql.exec('DELETE FROM visitors WHERE day < ?', cut)
