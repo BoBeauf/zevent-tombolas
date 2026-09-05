@@ -311,6 +311,7 @@ track('view')
 
 const td = $('#topdon'); if (td) td.addEventListener('click', () => track('don'))
 const vb = $('#verbi'); if (vb) vb.addEventListener('click', () => track('verbi'))
+const vbt = $('#verbitop'); if (vbt) vbt.addEventListener('click', () => track('verbi_h'))
 
 /* Signal de présence, une fois par minute et seulement quand l'onglet est visible.
    Le serveur le garde en mémoire : ça alimente le compteur « connectés maintenant »

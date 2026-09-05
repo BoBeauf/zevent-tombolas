@@ -32,6 +32,16 @@ a{color:inherit;text-decoration:none}
   font-weight:600;transition:color .15s;width:fit-content}
 .by:hover{color:var(--txt)}
 .by svg{width:11px;height:11px;flex:0 0 auto}
+/* Deuxième signature, à droite du handle X. Même taille, même gris : elle ne doit
+   pas peser plus lourd que l'attribution elle-même. La mini-grille (2×2) rappelle
+   les cases-définition des mots fléchés sans avoir à écrire ce que c'est. */
+.byline{display:flex;align-items:center;gap:7px;flex-wrap:wrap}
+.bysep{color:var(--line);font-size:12px;user-select:none}
+.vbg{flex:0 0 auto;display:grid;grid-template-columns:repeat(2,5px);grid-auto-rows:5px;gap:1px}
+.vbg i{background:currentColor;opacity:.32;border-radius:1px}
+.vbg i.d{opacity:.8}
+#verbitop:hover .vbg i{opacity:.55}
+#verbitop:hover .vbg i.d{opacity:1}
 
 /* ---------- hero ---------- */
 .hero{background:linear-gradient(160deg,rgba(255,201,77,.10),rgba(145,70,255,.05) 55%,transparent),var(--card);
