@@ -74,7 +74,13 @@ export class Scanner extends DurableObject {
        tout ce qui est relu à l'identique n'a aucune raison de repasser par SQLite, et
        chaque ligne lue compte dans le quota du plan gratuit. */
     this.cache = { at: 0, v: null }      // payload rendu
-    this.liveMap = null                  // statut live par login
+    /* La liste des participants est RECONSTRUITE depuis l'API toutes les 3 minutes :
+       la persister en base n'apportait rien et coûtait 341 écritures par rafraîchissement,
+       soit 164 000 par jour — l'essentiel du quota d'écritures du plan gratuit. Elle vit
+       donc en mémoire. Au redémarrage de l'objet, le premier rafraîchissement la remplit,
+       et le drapeau « a déjà lancé une tombola » se déduit de la table tombolas. */
+    this.st = new Map()                  // twitch_id -> fiche du streamer
+    this.stLoaded = false
     ctx.blockConcurrencyWhile(async () => { await this.arm() })
   }
 
@@ -195,6 +201,17 @@ export class Scanner extends DurableObject {
     return ev.id
   }
 
+  // Reconstitue le drapeau « ever » (a déjà lancé une tombola) après un redémarrage,
+  // en une seule requête au lieu de le persister ligne par ligne.
+  loadEver () {
+    if (this.stLoaded) return
+    this.stLoaded = true
+    for (const r of this.sql.exec('SELECT DISTINCT twitch_id FROM tombolas WHERE twitch_id IS NOT NULL').toArray()) {
+      this.everSet = this.everSet || new Set()
+      this.everSet.add(String(r.twitch_id))
+    }
+  }
+
   // Liste des participants : nom, avatar, login et identifiant Twitch, statut live.
   async refreshStreamers () {
     let id = this.meta('event_id')
@@ -203,22 +220,23 @@ export class Scanner extends DurableObject {
     const list = await this.get(`${EMS}/events/${id}/participations`, 20_000)
     if (!Array.isArray(list)) return
     const t = now()
+    this.loadEver()
     for (const p of list) {
-      const s = p.streamers?.[0] || {}
-      const tw = s.socials?.twitch
+      const sm = p.streamers?.[0] || {}
+      const tw = sm.socials?.twitch
       if (!tw?.id) continue
-      const viewers = (s.streaming_states || []).reduce((a, x) => a + (x.viewers || 0), 0)
-      this.sql.exec(
-        `INSERT INTO streamers(twitch_id,name,login,avatar,live,cents,viewers)
-         VALUES(?,?,?,?,?,?,?)
-         ON CONFLICT(twitch_id) DO UPDATE SET name=excluded.name, login=excluded.login,
-           avatar=excluded.avatar, live=excluded.live, cents=excluded.cents, viewers=excluded.viewers`,
-        String(tw.id), str(p.name), str(tw.login), str(p.profile_url),
-        p.live ? 1 : 0, p.amount_raised ?? 0, viewers)
+      const id = String(tw.id)
+      const viewers = (sm.streaming_states || []).reduce((a, x) => a + (x.viewers || 0), 0)
+      const prev = this.st.get(id)
+      this.st.set(id, {
+        twitch_id: id, name: str(p.name), login: str(tw.login), avatar: str(p.profile_url),
+        live: p.live ? 1 : 0, cents: p.amount_raised ?? 0, viewers,
+        ever: prev?.ever || (this.everSet?.has(id) ? 1 : 0),
+        last_scan: prev?.last_scan || 0,
+      })
     }
     this.setMeta('streamers_at', t)
     this.setMeta('streamers_n', list.length)
-    this.liveMap = null        // la liste vient de changer : on la relira une fois
     this.cache.at = 0
   }
 
@@ -226,7 +244,16 @@ export class Scanner extends DurableObject {
     if (!t?.id) return null
     const ts = now()
     const id = String(t.id)
+    /* On relit chaque tombola ouverte toutes les 20 s, mais la plupart du temps rien n'a
+       bougé. Réécrire quand même coûtait 78 000 écritures par jour. On compare donc à
+       l'état connu et on n'écrit que sur changement réel. `last_seen` n'entre pas dans
+       la comparaison : il change à chaque passage, par construction. */
+    const sig = JSON.stringify([eurToCents(t.amount), t.number ?? null, t.drawn ? 1 : 0,
+      t.end ?? null, t.numberOfWinners ?? null, (t.winners || []).length, (t.top || []).length, str(t.name)])
+    this.sigs = this.sigs || new Map()
+    if (this.sigs.get(id) === sig) return null          // rien de neuf, aucune écriture
     const prev = this.sql.exec('SELECT id, drawn FROM tombolas WHERE id=?', id).toArray()[0]
+    this.sigs.set(id, sig)
     this.sql.exec(
       `INSERT INTO tombolas(id,twitch_id,streamer,login,avatar,name,mode,high_value,end_ts,
          drawn,n_winners,winners,cents,n_dons,top,first_seen,last_seen)
@@ -244,7 +271,7 @@ export class Scanner extends DurableObject {
       t.drawn ? 1 : 0, t.numberOfWinners ?? null,
       JSON.stringify(mapAmounts(t.winners)), eurToCents(t.amount), t.number ?? null,
       JSON.stringify(mapAmounts(t.top)), ts, ts)
-    if (ctx.twitchId) this.sql.exec('UPDATE streamers SET ever=1 WHERE twitch_id=?', ctx.twitchId)
+    if (ctx.twitchId) { const f = this.st.get(String(ctx.twitchId)); if (f) f.ever = 1 }
     return { id, isNew: !prev, justDrawn: prev && !prev.drawn && t.drawn }
   }
 
@@ -267,42 +294,27 @@ export class Scanner extends DurableObject {
       }
     }
     const t = now()
-    // A : les tombolas ouvertes, y compris celles dont l'heure de fin vient de passer
-    // (le tirage arrive quelques instants après) — mais pas les reliquats jamais clôturés.
-    /* On relit le streamer depuis la table `streamers` plutôt que depuis la ligne de
-       tombola : une tombola relue par identifiant n'a pas forcément son attribution
-       (c'est le cas des lignes amorcées ci-dessous, et de celles vues avant que la
-       liste des participants soit chargée). ORDER BY ... DESC place les end_ts NULL
-       en dernier, donc les tombolas réellement en cours restent prioritaires. */
+    const fiche = id => this.st.get(String(id)) || {}
+    // A — tombolas ouvertes, relues par identifiant. Seule file qui touche la base,
+    // et elle est servie par l'index i_tb_drawn.
     push(this.sql.exec(
-      `SELECT t.id AS byId, t.twitch_id, s.name, s.login, s.avatar
-       FROM tombolas t LEFT JOIN streamers s ON s.twitch_id = t.twitch_id
-       WHERE t.drawn=0 AND (t.end_ts IS NULL OR t.end_ts < ?)
-       ORDER BY t.end_ts DESC LIMIT 12`,
-      t + 6 * 3600).toArray())
-    push(this.sql.exec(
-      `SELECT twitch_id, name, login, avatar FROM streamers
-       WHERE live=1 AND ever=1 ORDER BY last_scan LIMIT ?`, Math.ceil(budget * 0.35)).toArray())
-    /* On garde 3 places pour la file D. Sans cette réserve, A+B+C consomment tout le
-       budget dès qu'il y a une vingtaine de streamers en live, et les hors-ligne ne sont
-       jamais balayés — or un streamer peut laisser une tombola tourner après avoir coupé. */
+      `SELECT id AS byId, twitch_id FROM tombolas
+       WHERE drawn=0 AND (end_ts IS NULL OR end_ts < ?)
+       ORDER BY end_ts DESC LIMIT 12`, t + 6 * 3600).toArray()
+      .map(r => { const f = fiche(r.twitch_id); return { ...r, name: f.name, login: f.login, avatar: f.avatar } }))
+
+    /* B, C et D se calculent désormais sur la liste en mémoire : plus aucune lecture ni
+       écriture en base pour choisir qui scanner. C'est ce qui supprime les 108 000
+       UPDATE last_scan quotidiens. */
+    const all = [...this.st.values()]
+    const parScan = (arr) => arr.sort((a, b) => a.last_scan - b.last_scan)
     const reserve = 3
-    push(this.sql.exec(
-      `SELECT twitch_id, name, login, avatar FROM streamers
-       WHERE live=1 ORDER BY last_scan LIMIT ?`, Math.max(0, budget - out.length - reserve)).toArray())
-    push(this.sql.exec(
-      'SELECT twitch_id, name, login, avatar FROM streamers ORDER BY last_scan LIMIT ?', budget).toArray())
+    push(parScan(all.filter(x => x.live && x.ever)).slice(0, Math.ceil(budget * 0.35)))
+    push(parScan(all.filter(x => x.live)).slice(0, Math.max(0, budget - out.length - reserve)))
+    push(parScan(all).slice(0, budget))
     return out
   }
 
-  /* Amorçage. `/tombola/latest/{twitchId}` ne renvoie que la DERNIÈRE tombola d'un
-     streamer : un scanner démarré en cours d'event ne peut donc jamais retrouver les
-     précédentes — mesuré, 22 des 46 streamers concernés en avaient lancé plusieurs.
-     `/tombola/{id}` fonctionne en revanche pour n'importe quel identifiant connu.
-
-     On insère donc des lignes vides ne contenant qu'un identifiant et le streamer à qui
-     l'attribuer. Le scan normal (file A) les remplit ensuite en interrogeant l'API
-     officielle : aucune donnée n'est recopiée ici, seulement des identifiants. */
   seed () {
     if (this.meta('seeded') === SEED.eventId) return 0
     if (this.meta('event_id') !== SEED.eventId) return 0    // autre édition : rien à amorcer
@@ -316,6 +328,11 @@ export class Scanner extends DurableObject {
     this.setMeta('seeded', SEED.eventId)
     this.setMeta('seeded_n', n)
     return n
+  }
+
+  touch (twitchId) {
+    const f = twitchId && this.st.get(String(twitchId))
+    if (f) f.last_scan = now()
   }
 
   async alarm () {
@@ -335,7 +352,7 @@ export class Scanner extends DurableObject {
         used++
         try {
           const d = await this.get(url)
-          if (it.twitch_id) this.sql.exec('UPDATE streamers SET last_scan=? WHERE twitch_id=?', now(), it.twitch_id)
+          this.touch(it.twitch_id)
           if (!d?.tombola) {
             // réponse valide mais sans tombola : l'identifiant n'existe plus, on le retire
             if (it.byId) this.sql.exec('DELETE FROM tombolas WHERE id=? AND last_seen=0', it.byId)
@@ -350,13 +367,17 @@ export class Scanner extends DurableObject {
           // 404 sur un identifiant : la tombola a été supprimée du module officiel.
           // On retire le repère, sinon il occupe une place dans la file A indéfiniment.
           if (e.notFound && it.byId) this.sql.exec('DELETE FROM tombolas WHERE id=? AND last_seen=0', it.byId)
-          if (it.twitch_id) this.sql.exec('UPDATE streamers SET last_scan=? WHERE twitch_id=?', now(), it.twitch_id)
+          this.touch(it.twitch_id)
         }
       }
       if (hits) this.cache.at = 0        // des tombolas ont changé : payload à refaire
-      this.setMeta('scan_at', now())
-      this.setMeta('scan_used', used)
-      this.setMeta('scan_ms', Date.now() - t0)
+      // écrites une fois par minute : elles ne servent qu'à l'affichage de /stats
+      this.scanAt = now(); this.scanUsed = used
+      if (Date.now() - (this.metaAt || 0) > 60_000) {
+        this.metaAt = Date.now()
+        this.setMeta('scan_at', this.scanAt)
+        this.setMeta('scan_used', used)
+      }
       if (rate) this.setMeta('rate_limited_at', now())
       if (events.length) this.setMeta('last_new', JSON.stringify({ at: now(), ids: events }))
     } finally {
@@ -387,11 +408,7 @@ export class Scanner extends DurableObject {
     const all = real.filter(x => !stale.has(x.id))
     // relue seulement après un rafraîchissement de la liste (toutes les 3 min), pas à
     // chaque construction du payload
-    if (!this.liveMap) {
-      this.liveMap = new Map(this.sql.exec('SELECT twitch_id, login, live, viewers FROM streamers').toArray()
-        .map(r => [r.login, r]))
-    }
-    const live = this.liveMap
+    const live = new Map([...this.st.values()].map(r => [r.login, r]))
     const deco = x => ({ ...x, live: !!live.get(x.login)?.live, viewers: live.get(x.login)?.viewers ?? 0 })
     /* Classement des cagnottes par ce que leurs tombolas ont rapporté. On agrège par
        streamer plutôt que par tombola : la plupart en lancent plusieurs, et c'est le
@@ -431,8 +448,8 @@ export class Scanner extends DurableObject {
         streamers: Number(this.meta('streamers_n', 0)),
         seeded: Number(this.meta('seeded_n', 0)),
         pendingSeed: this.sql.exec('SELECT COUNT(*) n FROM tombolas WHERE last_seen=0').toArray()[0]?.n ?? 0,
-        scanAt: Number(this.meta('scan_at', 0)) || null,
-        scanUsed: Number(this.meta('scan_used', 0)),
+        scanAt: this.scanAt || Number(this.meta('scan_at', 0)) || null,
+        scanUsed: this.scanUsed ?? Number(this.meta('scan_used', 0)),
         rateLimitedAt: Number(this.meta('rate_limited_at', 0)) || null,
         tickSeconds: TICK_MS / 1000,
       },
