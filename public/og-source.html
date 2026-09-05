@@ -1,0 +1,69 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><style>
+*{margin:0;padding:0;box-sizing:border-box}
+html,body{width:1200px;height:630px;overflow:hidden}
+body{background:#0b0c12;color:#eaeef7;position:relative;
+  font-family:ui-sans-serif,system-ui,-apple-system,"Helvetica Neue",Inter,sans-serif;
+  -webkit-font-smoothing:antialiased}
+.glow{position:absolute;inset:0;
+  background:radial-gradient(760px 460px at 8% -12%,rgba(255,201,77,.22),transparent 62%),
+             radial-gradient(680px 420px at 96% 6%,rgba(145,70,255,.24),transparent 62%)}
+.wrap{position:relative;padding:58px 64px;height:100%;display:flex;flex-direction:column}
+
+.brand{display:flex;align-items:center;gap:13px;font-size:27px;font-weight:800;letter-spacing:-.01em}
+.brand .z{background:linear-gradient(92deg,#ffc94d,#9146FF);-webkit-background-clip:text;background-clip:text;color:transparent}
+
+h1{font-size:78px;line-height:1.04;font-weight:850;letter-spacing:-.035em;margin-top:34px;max-width:760px}
+h1 .g{background:linear-gradient(92deg,#ffc94d,#ff9e4d);-webkit-background-clip:text;background-clip:text;color:transparent}
+.sub{margin-top:26px;font-size:27px;line-height:1.44;color:#9aa2b8;max-width:660px;font-weight:500}
+.sub b{color:#eaeef7;font-weight:700}
+
+.foot{margin-top:auto;display:flex;align-items:center;gap:16px}
+.url{background:linear-gradient(92deg,#ffc94d,#ff9e4d);color:#1a1200;font-weight:800;font-size:25px;
+  padding:15px 26px;border-radius:14px;letter-spacing:-.01em}
+.tag{border:1px solid #2f3547;border-radius:99px;padding:12px 20px;font-size:20px;color:#9aa2b8;font-weight:600}
+.tag i{display:inline-block;width:10px;height:10px;border-radius:50%;background:#ff2d55;
+  box-shadow:0 0 12px #ff2d55;margin-right:10px;vertical-align:middle}
+
+/* Le ticket décoratif, avec ses encoches — même motif que les cartes du site */
+.ticket{position:absolute;right:-56px;top:158px;width:412px;padding:32px 36px;
+  background:#151824;border:1px solid #2b3145;border-radius:24px;
+  transform:rotate(6deg);box-shadow:0 40px 90px rgba(0,0,0,.6)}
+.ticket::before,.ticket::after{content:"";position:absolute;width:34px;height:34px;
+  background:#0b0c12;border:1px solid #2b3145;border-radius:50%;top:calc(50% - 17px)}
+.ticket::before{left:-18px}
+.ticket::after{right:-18px}
+.t-top{display:flex;align-items:center;gap:14px}
+.av{width:52px;height:52px;border-radius:50%;background:linear-gradient(140deg,#9146FF,#5b2ea8);flex:0 0 auto}
+.t-name{height:15px;width:132px;border-radius:99px;background:#39405a}
+.t-live{height:11px;width:86px;border-radius:99px;background:#2b3145;margin-top:9px}
+.t-lot{margin-top:22px;height:17px;width:100%;border-radius:99px;background:#333b53}
+.t-lot2{margin-top:11px;height:17px;width:64%;border-radius:99px;background:#2b3145}
+.t-nums{margin-top:26px;padding-top:22px;border-top:1px dashed #2b3145;display:flex;gap:26px}
+.t-nums div{flex:1}
+.k{font-size:13px;color:#5d6480;text-transform:uppercase;letter-spacing:.1em;font-weight:700}
+.v{font-size:31px;font-weight:850;margin-top:5px;letter-spacing:-.02em}
+.v.gold{color:#ffc94d}
+</style></head>
+<body>
+<div class="glow"></div>
+
+<div class="ticket">
+  <div class="t-top"><div class="av"></div><div><div class="t-name"></div><div class="t-live"></div></div></div>
+  <div class="t-lot"></div><div class="t-lot2"></div>
+  <div class="t-nums">
+    <div><div class="k">Collecté</div><div class="v">1 037 €</div></div>
+    <div><div class="k">Fin dans</div><div class="v gold">4:21</div></div>
+  </div>
+</div>
+
+<div class="wrap">
+  <div class="brand">🎟️ <span>Tombolas <span class="z">ZEvent</span></span></div>
+  <h1>Qui lance une tombola,<br><span class="g">là, maintenant ?</span></h1>
+  <div class="sub">Chaque don pendant une tombola vaut un ticket.<br><b>Toutes celles qui tournent, en direct</b> — et qui a gagné.</div>
+  <div class="foot">
+    <div class="url">zevent-tombolas.doublel.workers.dev</div>
+    <div class="tag"><i></i>mis à jour toutes les 10 s</div>
+  </div>
+</div>
+</body></html>

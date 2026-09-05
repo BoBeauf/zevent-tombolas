@@ -128,6 +128,25 @@ L'édition en cours est **découverte automatiquement** depuis `api.evenmorestat
 (celle dont le calendrier contient l'instant présent, sinon la plus récente) : l'outil
 survit à l'édition suivante sans redéploiement.
 
+## Régénérer l'aperçu social
+
+`public/og.png` (1200×630) est la vignette affichée sur X, Discord, Slack… Elle est
+dessinée en HTML dans `public/og-source.html` et rasterisée avec Chrome :
+
+```bash
+"/Applications/Google Chrome.app/Contents/MacOS/Google Chrome" \
+  --headless=new --disable-gpu --hide-scrollbars --force-device-scale-factor=1 \
+  --screenshot=public/og.png --window-size=1200,630 \
+  "file://$PWD/public/og-source.html"
+```
+
+Les URL des balises `og:image`, `og:url` et `twitter:image` sont **absolues** — c'est une
+exigence de X. Si tu déploies sur un autre domaine, ce sont les seules lignes à changer
+dans `public/index.html`.
+
+X met les aperçus en cache par URL : si l'ancienne carte persiste après un déploiement,
+poste le lien avec un paramètre (`?v=2`) pour forcer un nouveau rendu.
+
 ## Voir les stats du site
 
 - **`/stats`** — page intégrée : visites et visiteurs distincts du jour, historique sur
