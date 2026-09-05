@@ -16,7 +16,7 @@ a{color:inherit;text-decoration:none}
 .sp{flex:1}
 
 /* ---------- barre du haut ---------- */
-.top{display:flex;align-items:center;gap:10px;padding-top:16px;padding-bottom:14px;flex-wrap:wrap}
+.top{display:flex;align-items:center;gap:10px 12px;padding-top:16px;padding-bottom:14px;flex-wrap:wrap}
 .brand{font-weight:800;font-size:18px;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
 .brand b{background:linear-gradient(92deg,var(--gold),var(--purple));
   -webkit-background-clip:text;background-clip:text;color:transparent}
@@ -26,6 +26,12 @@ a{color:inherit;text-decoration:none}
   display:inline-flex;align-items:center;gap:6px;transition:border-color .15s,color .15s}
 .ghost:hover{border-color:var(--gold);color:var(--txt)}
 .ghost.on{border-color:var(--gold);color:var(--gold);background:rgba(255,201,77,.1)}
+
+.idbox{display:flex;flex-direction:column;gap:3px;min-width:0}
+.by{display:inline-flex;align-items:center;gap:6px;color:var(--dim2);font-size:12px;
+  font-weight:600;transition:color .15s;width:fit-content}
+.by:hover{color:var(--txt)}
+.by svg{width:11px;height:11px;flex:0 0 auto}
 
 /* ---------- hero ---------- */
 .hero{background:linear-gradient(160deg,rgba(255,201,77,.10),rgba(145,70,255,.05) 55%,transparent),var(--card);
@@ -144,6 +150,13 @@ footer p{margin-bottom:8px}
   cursor:pointer;font-size:13px;padding:4px}
 .toast .x:hover{color:var(--txt)}
 
+/* Sous 560 px : l'identité prend toute la largeur, les deux boutons partagent
+   la ligne suivante au lieu de se répartir sur une ligne et demie. */
+@media(max-width:560px){
+  .idbox{width:100%}
+  .top .sp{display:none}
+  .top{gap:9px}
+}
 @media(max-width:520px){
   main,.top{padding:0 13px}
   .hero{padding:18px 17px 16px;border-radius:16px}
