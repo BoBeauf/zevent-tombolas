@@ -15,7 +15,7 @@ const UA = 'zevent-tombolas/1.0 (usage personnel, lecture seule)'
    Le plan gratuit Workers plafonne à 50 sous-requêtes par invocation, ce qui rendrait un
    Cron Trigger (1 minute de granularité minimale) incapable de dépasser 0,8 req/s. D'où
    l'alarme de Durable Object, qui se replanifie librement en dessous de la minute. */
-const TICK_MS = 10_000
+const TICK_MS = 15_000
 const BUDGET = 25
 
 /* Types d'événements acceptés par /api/hit. Liste blanche stricte : l'endpoint est
@@ -51,6 +51,12 @@ export class Scanner extends DurableObject {
         cents INTEGER, n_dons INTEGER, top TEXT,
         first_seen INTEGER, last_seen INTEGER);
       CREATE INDEX IF NOT EXISTS i_tb_drawn ON tombolas(drawn, end_ts);
+      /* Sans ces index, chaque « ORDER BY last_scan LIMIT n » balayait les 341 lignes de
+         streamers — trois fois par réveil, 8 640 fois par jour, soit 8,8 M lignes lues
+         par jour à elles seules. Avec, on ne lit que les n lignes demandées. */
+      CREATE INDEX IF NOT EXISTS i_str_scan ON streamers(last_scan);
+      CREATE INDEX IF NOT EXISTS i_str_live_scan ON streamers(live, last_scan);
+      CREATE INDEX IF NOT EXISTS i_str_ever ON streamers(live, ever, last_scan);
       /* Fréquentation. Le tableau de bord Cloudflare compte les requêtes, ce qui mélange
          chargements de page et sondages d'API — on compte donc les visites nous-mêmes.
          « vid » est un identifiant aléatoire tiré par le navigateur, sans lien avec l'IP :
@@ -60,6 +66,11 @@ export class Scanner extends DurableObject {
       -- personnes distinctes par type d'événement (alerte activée, clic don, clic Twitch…)
       CREATE TABLE IF NOT EXISTS ev(day TEXT, kind TEXT, vid TEXT, PRIMARY KEY(day, kind, vid));
     `)
+    /* Caches mémoire. Le Durable Object est un processus qui vit entre les requêtes :
+       tout ce qui est relu à l'identique n'a aucune raison de repasser par SQLite, et
+       chaque ligne lue compte dans le quota du plan gratuit. */
+    this.cache = { at: 0, v: null }      // payload rendu
+    this.liveMap = null                  // statut live par login
     ctx.blockConcurrencyWhile(async () => { await this.arm() })
   }
 
@@ -83,7 +94,14 @@ export class Scanner extends DurableObject {
     if (u.pathname === '/scan') return new Response('ok')
     if (u.pathname === '/hit') { this.hit(u.searchParams.get('v'), u.searchParams.get('k') || 'view'); return new Response('ok') }
     if (u.pathname === '/stats') return Response.json(this.stats())
-    return Response.json(this.payload())
+    /* Le payload coûte ~135 lignes lues. Le reconstruire à chaque requête revenait à
+       2,9 M lignes par jour : on le garde 20 s en mémoire, ce qui ne change rien à
+       l'affichage (le scan tourne toutes les 15 s et les comptes à rebours sont calculés
+       dans le navigateur). */
+    if (Date.now() - this.cache.at > 20_000 || !this.cache.v) {
+      this.cache = { at: Date.now(), v: JSON.stringify(this.payload()) }
+    }
+    return new Response(this.cache.v, { headers: { 'content-type': 'application/json' } })
   }
 
   hit (vid, kind) {
@@ -185,6 +203,8 @@ export class Scanner extends DurableObject {
     }
     this.setMeta('streamers_at', t)
     this.setMeta('streamers_n', list.length)
+    this.liveMap = null        // la liste vient de changer : on la relira une fois
+    this.cache.at = 0
   }
 
   saveTombola (t, ctx) {
@@ -318,6 +338,7 @@ export class Scanner extends DurableObject {
           if (it.twitch_id) this.sql.exec('UPDATE streamers SET last_scan=? WHERE twitch_id=?', now(), it.twitch_id)
         }
       }
+      if (hits) this.cache.at = 0        // des tombolas ont changé : payload à refaire
       this.setMeta('scan_at', now())
       this.setMeta('scan_used', used)
       this.setMeta('scan_ms', Date.now() - t0)
@@ -349,15 +370,36 @@ export class Scanner extends DurableObject {
     const STALE = 6 * 3600
     const stale = new Set(real.filter(x => !x.drawn && (x.endTs ?? 0) > t + STALE).map(x => x.id))
     const all = real.filter(x => !stale.has(x.id))
-    const live = new Map(this.sql.exec('SELECT twitch_id, login, live, viewers FROM streamers').toArray()
-      .map(r => [r.login, r]))
+    // relue seulement après un rafraîchissement de la liste (toutes les 3 min), pas à
+    // chaque construction du payload
+    if (!this.liveMap) {
+      this.liveMap = new Map(this.sql.exec('SELECT twitch_id, login, live, viewers FROM streamers').toArray()
+        .map(r => [r.login, r]))
+    }
+    const live = this.liveMap
     const deco = x => ({ ...x, live: !!live.get(x.login)?.live, viewers: live.get(x.login)?.viewers ?? 0 })
+    /* Classement des cagnottes par ce que leurs tombolas ont rapporté. On agrège par
+       streamer plutôt que par tombola : la plupart en lancent plusieurs, et c'est le
+       cumul qui est parlant. Même base que le reste (essais et reliquats déjà écartés). */
+    const byS = new Map()
+    for (const x of all) {
+      const k = x.login || x.streamer || x.id
+      const e = byS.get(k) || { streamer: x.streamer, login: x.login, avatar: x.avatar, cents: 0, dons: 0, n: 0, drawn: 0, lastTs: 0 }
+      e.cents += x.cents || 0; e.dons += x.nDons || 0; e.n++
+      if (x.drawn) e.drawn++
+      if ((x.endTs ?? 0) > e.lastTs) e.lastTs = x.endTs ?? 0
+      byS.set(k, e)
+    }
+    const top = [...byS.values()].sort((a, b) => b.cents - a.cents).slice(0, 10)
+      .map(x => ({ ...x, live: !!live.get(x.login)?.live, viewers: live.get(x.login)?.viewers ?? 0 }))
+
     const active = all.filter(x => !x.drawn && (x.endTs ?? 0) > t).map(deco)
     const pending = all.filter(x => !x.drawn && (x.endTs ?? 0) <= t).map(deco)
     const past = all.filter(x => x.drawn).map(deco)
     return {
       at: Date.now(), now: t,
       event: { name: this.meta('event_name'), start: Number(this.meta('event_start', 0)) || null, end: Number(this.meta('event_end', 0)) || null },
+      top,
       active: active.sort((a, b) => (a.endTs ?? 9e9) - (b.endTs ?? 9e9)),
       pending: pending.sort((a, b) => (b.endTs ?? 0) - (a.endTs ?? 0)),
       past: past.sort((a, b) => (b.endTs ?? 0) - (a.endTs ?? 0)).slice(0, 120),
@@ -416,7 +458,7 @@ export default {
       const res = new Response(r.body, {
         headers: {
           'content-type': 'application/json; charset=utf-8',
-          'cache-control': 'public, max-age=3, s-maxage=4',
+          'cache-control': 'public, max-age=5, s-maxage=10',
           'access-control-allow-origin': '*',
         },
       })

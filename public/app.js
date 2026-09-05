@@ -97,6 +97,7 @@ function render () {
   $('#npast').textContent = D.past.length
   $('#pendingwrap').hidden = !D.pending.length
 
+  renderTop()
   fill('#active', D.active, 'Aucune tombola ouverte à cet instant. Ça bouge vite : garde la page ouverte.')
   fill('#pending', D.pending, '')
   renderPast()
@@ -109,6 +110,28 @@ function render () {
     + (S.hidden ? ` · ${S.hidden} test${S.hidden > 1 ? 's' : ''} écarté${S.hidden > 1 ? 's' : ''}` : '')
     + (S.stale ? ` · ${S.stale} reliquat${S.stale > 1 ? 's' : ''} masqué${S.stale > 1 ? 's' : ''}` : '')
     + (S.rateLimitedAt && D.now - S.rateLimitedAt < 120 ? ' · <b style="color:var(--gold)">ralenti par l\'API</b>' : '')
+}
+
+/* Classement par streamer, cumul de toutes ses tombolas. */
+function renderTop () {
+  const box = $('#top'); if (!box) return
+  const T = D.top || []
+  $('#ntop').textContent = T.length
+  $('#topwrap').hidden = !T.length
+  const max = T.length ? T[0].cents : 1
+  box.innerHTML = T.map((x, i) => `<div class="ld">
+    <div class="rk">${i + 1}</div>
+    ${x.avatar ? `<img src="${esc(x.avatar)}" alt="" loading="lazy">` : '<div class="ph"></div>'}
+    <div class="who4">
+      <div class="nm2">${x.login
+        ? `<a href="https://twitch.tv/${esc(x.login)}" target="_blank" rel="noopener">${esc(x.streamer || '?')}</a>`
+        : esc(x.streamer || '?')}${x.live ? '<span class="dot on"></span>' : ''}</div>
+      <div class="sub2">${x.n} tombola${x.n > 1 ? 's' : ''} · ${num(x.dons)} participations${x.drawn < x.n ? ` · ${x.n - x.drawn} en cours` : ''}</div>
+    </div>
+    <div class="bar2"><div style="width:${(100 * x.cents / max).toFixed(1)}%"></div></div>
+    <div class="amt2">${eur(x.cents)}</div>
+  </div>`).join('')
+  for (const a of box.querySelectorAll('a')) a.addEventListener('click', () => track('twitch'))
 }
 
 function fill (sel, list, vide) {

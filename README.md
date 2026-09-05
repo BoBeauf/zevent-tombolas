@@ -54,6 +54,31 @@ réveil dispose de son propre budget de 50 sous-requêtes.
 | Persistance | SQLite du Durable Object — gratuit sur le plan Free, aucune base externe |
 | Robustesse | un Cron Trigger toutes les 5 min réarme l'alarme si elle se perdait (redéploiement, incident) |
 
+### Le quota qui mord vraiment : les lignes lues
+
+Le plan gratuit des Durable Objects plafonne à **5 millions de lignes lues par jour**, et
+c'est ce plafond qu'on touche en premier — bien avant les 100 000 requêtes. Première
+version : **20,7 M lignes par jour, soit 4,1× le quota**. Deux causes :
+
+| Cause | Coût |
+|---|---|
+| `ORDER BY last_scan LIMIT n` sans index sur `streamers` — trois fois par réveil | 8,8 M/jour |
+| Le payload reconstruit à chaque requête (135 + 341 lignes) | 10,3 M/jour |
+
+Corrections :
+
+1. **Index** `(last_scan)`, `(live, last_scan)` et `(live, ever, last_scan)`. Les trois
+   files de scan ne lisent plus que les n lignes demandées au lieu des 341. Vérifié au
+   `EXPLAIN QUERY PLAN` : `SEARCH ... USING INDEX` partout.
+2. **Payload gardé 20 s en mémoire** dans le Durable Object, invalidé dès qu'un scan
+   modifie quelque chose. L'objet est un processus qui vit entre les requêtes : ce qui ne
+   change pas n'a aucune raison de repasser par SQLite.
+3. **Carte des streamers en mémoire**, relue seulement au rafraîchissement de la liste
+   (toutes les 3 min) au lieu de chaque construction de payload.
+4. Cadence de scan à **15 s** et cache d'arête à 10 s, alignés.
+
+Résultat : **1,5 M lignes par jour, 70 % sous le plafond.**
+
 ### Tenir dans le plan gratuit
 
 Le plan gratuit donne **100 000 requêtes par jour**. Un seul visiteur qui sonderait toutes
