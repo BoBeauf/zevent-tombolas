@@ -482,19 +482,17 @@ export class Scanner extends DurableObject {
     const raw = rows.map(map)
     // Une tombola d'essai se reconnaît objectivement : zéro euro ET zéro participation.
     const real = raw.filter(x => x.cents || x.nDons)
-    /* Un reliquat, c'est une tombola créée une fois et jamais clôturée : elle encaisse
-       tous les dons du streamer et fausse les totaux. Le repère fiable n'est pas sa
-       durée mais sa date de fin — aucune tombola sérieuse ne se termine après
-       l'évènement lui-même.
+    /* Une tombola non tirée dont la fin est encore à plus de 6 h est un reliquat : créée
+       une fois puis jamais clôturée, elle encaisse tous les dons du streamer depuis le
+       début. Les vraies sont des one-shots de 5 à 30 minutes.
 
-       L'ancienne règle (« fin à plus de 6 h ») partait du principe que les vraies sont
-       des one-shots de 5 à 30 minutes. C'est vrai des grosses chaînes, pas des autres :
-       beaucoup n'en lancent qu'une seule, ouverte jusqu'au dernier soir. Elles étaient
-       toutes masquées — 12 tombolas bien réelles, 54 000 € cumulés, dont une à 23 800 €
-       avec 452 participations. */
-    const evEnd = Number(this.meta('event_end', 0)) || 0
-    const tropLoin = evEnd ? evEnd + 6 * 3600 : t + 48 * 3600
-    const stale = new Set(real.filter(x => !x.drawn && (x.endTs ?? 0) > tropLoin).map(x => x.id))
+       Ce seuil est volontairement le même que la fenêtre de la file A ci-dessous : une
+       tombola masquée ici n'est pas relue par identifiant là-bas, donc elle ne consomme
+       aucun créneau de scan. Et comme la file A ne marque plus le streamer comme visité
+       (voir `mark`), une longue tombola n'empêche jamais de découvrir les autres qui
+       démarrent pendant ce temps — vérifié sur les 5 cas de l'édition. */
+    const STALE = 6 * 3600
+    const stale = new Set(real.filter(x => !x.drawn && (x.endTs ?? 0) > t + STALE).map(x => x.id))
     const all = real.filter(x => !stale.has(x.id))
     // relue seulement après un rafraîchissement de la liste (toutes les 3 min), pas à
     // chaque construction du payload
