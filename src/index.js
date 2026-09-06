@@ -361,9 +361,15 @@ export class Scanner extends DurableObject {
     // A — tombolas ouvertes, relues par identifiant. Seule file qui touche la base,
     // et elle est servie par l'index i_tb_drawn.
     push(this.sql.exec(
+      /* Du plus urgent au moins urgent : d'abord celles dont l'heure de fin est déjà
+         passée (on attend le tirage), puis celles qui finissent le plus tôt. L'ordre
+         inverse plaçait les échéances lointaines en tête — sans effet tant qu'il y avait
+         trois tombolas ouvertes, mais en fin d'évènement, quand une quinzaine se
+         terminent dans les six heures, la limite de 12 écartait justement la plus
+         pressée. */
       `SELECT id AS byId, twitch_id FROM tombolas
        WHERE drawn=0 AND (end_ts IS NULL OR end_ts < ?)
-       ORDER BY end_ts DESC LIMIT 12`, t + 6 * 3600).toArray()
+       ORDER BY end_ts ASC LIMIT 12`, t + 6 * 3600).toArray()
       .map(r => { const f = fiche(r.twitch_id); return { ...r, name: f.name, login: f.login, avatar: f.avatar } }))
 
     /* B, C et D se calculent désormais sur la liste en mémoire : plus aucune lecture ni
@@ -476,11 +482,19 @@ export class Scanner extends DurableObject {
     const raw = rows.map(map)
     // Une tombola d'essai se reconnaît objectivement : zéro euro ET zéro participation.
     const real = raw.filter(x => x.cents || x.nDons)
-    /* Une tombola non tirée dont la fin est encore à plus de 6 h est un reliquat : créée
-       une fois puis jamais clôturée, elle encaisse tous les dons du streamer depuis le
-       début. Les vraies sont des one-shots de 5 à 30 minutes. */
-    const STALE = 6 * 3600
-    const stale = new Set(real.filter(x => !x.drawn && (x.endTs ?? 0) > t + STALE).map(x => x.id))
+    /* Un reliquat, c'est une tombola créée une fois et jamais clôturée : elle encaisse
+       tous les dons du streamer et fausse les totaux. Le repère fiable n'est pas sa
+       durée mais sa date de fin — aucune tombola sérieuse ne se termine après
+       l'évènement lui-même.
+
+       L'ancienne règle (« fin à plus de 6 h ») partait du principe que les vraies sont
+       des one-shots de 5 à 30 minutes. C'est vrai des grosses chaînes, pas des autres :
+       beaucoup n'en lancent qu'une seule, ouverte jusqu'au dernier soir. Elles étaient
+       toutes masquées — 12 tombolas bien réelles, 54 000 € cumulés, dont une à 23 800 €
+       avec 452 participations. */
+    const evEnd = Number(this.meta('event_end', 0)) || 0
+    const tropLoin = evEnd ? evEnd + 6 * 3600 : t + 48 * 3600
+    const stale = new Set(real.filter(x => !x.drawn && (x.endTs ?? 0) > tropLoin).map(x => x.id))
     const all = real.filter(x => !stale.has(x.id))
     // relue seulement après un rafraîchissement de la liste (toutes les 3 min), pas à
     // chaque construction du payload

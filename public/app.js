@@ -56,6 +56,11 @@ function checkNew () {
     if (seen.has(x.id)) continue
     seen.add(x.id)
     if (!NOTIF) continue
+    /* « Nouvelle » doit vouloir dire créée à l'instant, pas « apparue à l'écran à
+       l'instant ». Sans ce garde-fou, un onglet resté ouvert reçoit une salve d'alertes
+       dès que le serveur élargit ce qu'il affiche — douze notifications d'un coup pour
+       des tombolas ouvertes depuis des heures. */
+    if (x.firstSeen && D.now - x.firstSeen > 600) continue
     toast(`<div class="t1">🎟️ Nouvelle tombola chez <b>${esc(x.streamer || '?')}</b></div>
       <div class="t2">${esc(x.name || 'Sans intitulé')} — ${x.endTs ? 'fin dans ' + cd(x.endTs - D.now) : 'en cours'}</div>`)
     if (window.Notification && Notification.permission === 'granted' && !notified.has(x.id)) {
