@@ -285,6 +285,24 @@ export class Scanner extends DurableObject {
     this.cache.at = 0
   }
 
+  /* Le module officiel ne connaît plus cette tombola. C'est le cas d'un brouillon
+     créé puis supprimé : le streamer lance « Crampon droite », se ravise, efface, et
+     relance « Crampon gauche » sous un nouvel identifiant. L'ancienne ligne reste alors
+     chez nous, jamais tirée, et campe dans « Tirage imminent » pour toujours — en plus
+     d'occuper une place de la file A à chaque tick.
+
+     On ne l'efface que si elle n'a jamais été observée (repère d'amorçage) ou si son
+     heure de fin est passée depuis un quart d'heure : un 404 sur une tombola encore
+     en cours est probablement passager, on ne veut pas la perdre pour autant.
+     Une tombola déjà tirée n'est jamais effacée, son résultat fait partie de l'historique. */
+  forget (id) {
+    const n = this.sql.exec(
+      `DELETE FROM tombolas WHERE id=? AND drawn=0
+         AND (last_seen=0 OR (end_ts IS NOT NULL AND end_ts < ?))`, id, now() - 900).rowsWritten
+    if (n) this.sigs?.delete(String(id))
+    return n
+  }
+
   saveTombola (t, ctx) {
     if (!t?.id) return null
     const ts = now()
@@ -403,8 +421,8 @@ export class Scanner extends DurableObject {
           const d = await this.get(url)
           this.touch(it.twitch_id)
           if (!d?.tombola) {
-            // réponse valide mais sans tombola : l'identifiant n'existe plus, on le retire
-            if (it.byId) this.sql.exec('DELETE FROM tombolas WHERE id=? AND last_seen=0', it.byId)
+            // réponse valide mais sans tombola : l'identifiant n'existe plus, on l'oublie
+            if (it.byId && this.forget(it.byId)) hits++
             continue
           }
           const r = this.saveTombola(d.tombola, {
@@ -414,8 +432,7 @@ export class Scanner extends DurableObject {
         } catch (e) {
           if (e.rateLimited) { rate = true; break }
           // 404 sur un identifiant : la tombola a été supprimée du module officiel.
-          // On retire le repère, sinon il occupe une place dans la file A indéfiniment.
-          if (e.notFound && it.byId) this.sql.exec('DELETE FROM tombolas WHERE id=? AND last_seen=0', it.byId)
+          if (e.notFound && it.byId && this.forget(it.byId)) hits++
           this.touch(it.twitch_id)
         }
       }
