@@ -398,6 +398,16 @@ export class Scanner extends DurableObject {
     if (f) f.last_scan = now()
   }
 
+  /* `last_scan` ordonne une seule file : « chez qui faut-il aller voir s'il y a du
+     nouveau ». Seule une lecture par /tombola/latest y répond. Relire une tombola
+     déjà connue par identifiant (file A) ne dit rien sur l'apparition d'une autre :
+     compter ça comme un passage sortait le streamer de la file de découverte tant
+     qu'une de ses tombolas restait ouverte — et définitivement si c'était un fantôme,
+     relu à chaque tick. Ses nouvelles tombolas devenaient alors invisibles. */
+  mark (it) {
+    if (!it.byId) this.touch(it.twitch_id)
+  }
+
   async alarm () {
     const t0 = Date.now()
     let used = 0, hits = 0, rate = false
@@ -419,7 +429,7 @@ export class Scanner extends DurableObject {
         used++
         try {
           const d = await this.get(url)
-          this.touch(it.twitch_id)
+          this.mark(it)
           if (!d?.tombola) {
             // réponse valide mais sans tombola : l'identifiant n'existe plus, on l'oublie
             if (it.byId && this.forget(it.byId)) hits++
@@ -433,7 +443,7 @@ export class Scanner extends DurableObject {
           if (e.rateLimited) { rate = true; break }
           // 404 sur un identifiant : la tombola a été supprimée du module officiel.
           if (e.notFound && it.byId && this.forget(it.byId)) hits++
-          this.touch(it.twitch_id)
+          this.mark(it)
         }
       }
       if (hits) this.cache.at = 0        // des tombolas ont changé : payload à refaire
